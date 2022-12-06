@@ -1,3 +1,5 @@
+A Clone of HX DOS extender (Baron-von-Riedesel/HX), mainly for port trap of the HDPMI.
+---------------------------------------------------------------------------------------------
 
 Here's the most up-to-date version of HX DOS extender.
 
