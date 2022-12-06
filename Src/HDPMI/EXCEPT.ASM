@@ -199,7 +199,8 @@ _exceptZ endp
 EXCFRX struct
 wExcNo	dw ?
 		dw ?
-		dq ?		;dpmi return address
+rCS		dd ?		;dpmi return address
+rEIP	dd ?
 rErr	dd ?		;error code
 union
 struct
@@ -211,6 +212,27 @@ ends
 EXCFRX ends
 
 _exceptX proc public
+
+ if ?PMIOPL eq 0 ;HOWTO: do this in ring 0
+	cmp [esp].EXCFRX.wExcNo, 0Dh ;#GP?
+	jne @F
+	push ebx
+	push es
+	mov ebx, [esp+8].EXCFRX.rCS
+	mov es, ebx
+	mov ebx, [esp+8].EXCFRX.rEIP
+	mov bx, es:[ebx] ;check instructions for IN/OUT. TODO: check [REP] INS/OUTS
+	pop es
+	call _I2f168A_Hdpmi_InOutExcHandler
+	test ebx, ebx
+	pop ebx
+	jz @F
+	add [esp].EXCFRX.rEIP, ebx ;advance (e)ip
+	add esp, 4 ; pop error code
+	iret
+@@:
+ endif
+
 	cld
 	sub esp, 3*4	;12		;make room for a R3FAULT32 item
 	push ebp		;+4=16

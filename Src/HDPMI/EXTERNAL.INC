@@ -259,6 +259,9 @@ externdef _I2F168A_MSDOS:abs
 if ?VENDORAPI
 externdef _I2F168A_HDPMI:abs
 endif
+if ?PMIOPL eq 0
+externdef _I2f168A_Hdpmi_InOutExcHandler:abs
+endif
 externdef _I2F1684_0001_:abs
 externdef _I2F1684_0009_:abs
 externdef _I2F1684_0017_:abs
