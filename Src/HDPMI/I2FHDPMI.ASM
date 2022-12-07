@@ -25,6 +25,14 @@ portE dw -1
 sel dw -1
 off dd -1
 IOPORTTRAP ends
+
+IOTP_COUNT equ 4
+
+_DATA16 segment
+iotable label byte
+ IOPORTTRAP IOTP_COUNT dup(<>)
+_DATA16 ends
+
 endif
 
 _TEXT32 segment
@@ -141,10 +149,6 @@ is0005:
 ;--- bit 1: 0=port in dx, 1= port in bits 8-15
 ;--- bit 2-3: access 00=byte, 01=word, 10=dword, 11=string
 ;--- bit 4-7: size of instruction
-IOTP_COUNT equ 4
-iotable label byte
- IOPORTTRAP IOTP_COUNT dup(<>)
-
 is0006:
 	pushad
 	mov ebx, offset taskseg
@@ -171,18 +175,19 @@ is0006:
 
 ;--- todo: store handler routines and return handle in eax
 ;--- in a first step, it might be sufficient to have static storage for 4 port ranges.
+	sub esi, edi
 	lea ebx, [iotable]
 @@:
-	mov eax, [ebx]
+	mov eax, ss:[ebx]
 	cmp eax, 0FFFFFFFFh
 	je test2
 	jmp fail_0006
 test2:
-	mov eax, [ebx + 4]
+	mov eax, ss:[ebx + 4]
 	cmp eax, 0FFFFFFFFh
 	je @F
 	add ebx, sizeof IOPORTTRAP
-	lea eax, [iotable + sizeof IOPORTTRAP * IOTP_COUNT]
+	lea eax, ss:[iotable + sizeof IOPORTTRAP * IOTP_COUNT]
 	cmp eax, ebx
 	jbe fail_0006
 	loop @B
@@ -191,13 +196,13 @@ fail_0006:
 	stc
 	jmp done_0006
 @@: ;found empty slot
-	mov [ebx].IOPORTTRAP.portS, si
+	mov ss:[ebx].IOPORTTRAP.portS, si
 	add si, di ;end port = start port + count - 1
 	dec si
-	mov [ebx].IOPORTTRAP.portE, si
+	mov ss:[ebx].IOPORTTRAP.portE, si
 	mov eax, [esp].PUSHADS.rECX
-	mov [ebx].IOPORTTRAP.sel, ax
-	mov [ebx].IOPORTTRAP.off, edx
+	mov ss:[ebx].IOPORTTRAP.sel, ax
+	mov ss:[ebx].IOPORTTRAP.off, edx
 	mov eax, ebx ;use table entry addr as handle
 	clc
 
@@ -240,9 +245,9 @@ fail_0007:
 	inc esi
 	loop @B
 
-	mov dword ptr [edx], 0FFFFFFFFh
-	mov dword ptr [edx+4], 0FFFFFFFFh
-	mov word ptr [edx+8], 0FFFFh
+	mov dword ptr ss:[edx], 0FFFFFFFFh
+	mov dword ptr ss:[edx+4], 0FFFFFFFFh
+	mov word ptr ss:[edx+8], 0FFFFh
 	clc
 done_0007:
 	popad
@@ -345,14 +350,14 @@ dxset: ;dx already set
 @@:
 	lea ebx, [iotable]
 tableloop:
-	cmp dx, [ebx].IOPORTTRAP.portS ;check dx(port) >= portS && dx(port)+count <= portE
+	cmp dx, ss:[ebx].IOPORTTRAP.portS ;check dx(port) >= portS && dx(port)+count <= portE
 	jb tablenext
 	push dx
 	push cx
 	xor cl, cl
 	xchg cl, ch
 	add dx, cx
-	cmp dx, [ebx].IOPORTTRAP.portE
+	cmp dx, ss:[ebx].IOPORTTRAP.portE
 	pop cx
 	pop dx
 	ja tablenext
@@ -383,7 +388,7 @@ portloop: ;iterate ports and do 1 byte at a time. don't handle ports across iota
 	push edx
 	push ecx
 	xor ch, ch
-	call far ptr [ebx].IOPORTTRAP.sel ;call the registerred handler, eax=val (out), edx=port, ecx=out. return eax for IN
+	call far ptr ss:[ebx].IOPORTTRAP.sel ;call the registerred handler, eax=val (out), edx=port, ecx=out. return eax for IN
 	pop ecx
 	push ecx
 
