@@ -213,21 +213,29 @@ EXCFRX ends
 
 _exceptX proc public
 
- if ?PMIOPL eq 0 ;HOWTO: do this in ring 0
+ if ?PMIOPL eq 0
 	cmp [esp].EXCFRX.wExcNo, 0Dh ;#GP?
 	jne @F
+	push ecx
 	push ebx
 	push es
 	mov ebx, [esp+8].EXCFRX.rCS
-	mov es, ebx
+	mov es, bx
 	mov ebx, [esp+8].EXCFRX.rEIP
-	mov bx, es:[ebx] ;check instructions for IN/OUT. TODO: check [REP] INS/OUTS
-	pop es
+	mov ebx, es:[ebx] ;check instructions for IN/OUT. TODO: check [REP] INS/OUTS
+	xor ecx, ecx
+	cmp bl, 066h
+	jne @F
+	shr ebx, 8
+	mov ecx, 0100h ;ch=1
+@@:
 	call _I2f168A_Hdpmi_InOutExcHandler
-	test ebx, ebx
-	pop ebx
-	jz @F
 	add [esp].EXCFRX.rEIP, ebx ;advance (e)ip
+	test ebx, ebx
+	pop es
+	pop ebx
+	pop ecx
+	jz @F
 	add esp, 4 ; pop error code
 	iret
 @@:

@@ -20,8 +20,8 @@ displayhdltab proto near
 
 if ?PMIOPL eq 0
 IOPORTTRAP struct
-ports dw -1
-porte dw -1
+portS dw -1
+portE dw -1
 sel dw -1
 off dd -1
 IOPORTTRAP ends
@@ -191,8 +191,10 @@ fail_0006:
 	stc
 	jmp done_0006
 @@: ;found empty slot
-	mov [ebx].IOPORTTRAP.ports, si
-	mov [ebx].IOPORTTRAP.porte, di
+	mov [ebx].IOPORTTRAP.portS, si
+	add si, di ;end port = start port + count - 1
+	dec si
+	mov [ebx].IOPORTTRAP.portE, si
 	mov eax, [esp].PUSHADS.rECX
 	mov [ebx].IOPORTTRAP.sel, ax
 	mov [ebx].IOPORTTRAP.off, edx
@@ -206,11 +208,9 @@ done_0006:
 is0007:
 	pushad
 
-	lea ebx, [iotable] ;check if handle is in the oitable
-	cmp edx, ebx
+	cmp edx, offset iotable ;check if handle is in the oitable
 	jb fail_0007
-	lea ebx, [iotable + sizeof IOPORTTRAP * IOTP_COUNT]
-	cmp edx, ebx
+	cmp edx, offset iotable + sizeof IOPORTTRAP * IOTP_COUNT
 	jae fail_0007
 	jmp @F
 fail_0007:
@@ -257,58 +257,107 @@ is0009:
 _I2f168A_Hdpmi endp
 
 
-; bl: opcode
-; bh: oprand (if exist)
-; eax: in/out value
-; dx: port
-; return: ebx: 0 if not handled, > 0 used to advance cs:eip 
-; return eax for IN value if ebx > 0, otherwise not modified
+if ?PMIOPL eq 0
+
+; get operande size from selector type (32/64) in ES, and prefix flag in CH (1 if has prefix, 0 if not)
+; input:
+;	ES
+;	CH
+; return operand size in CH
+_I2f168A_Hdpmi_GetOprandSize proc near
+	push ebx
+	push ds
+
+	sldt bx
+	mov ds, bx
+	mov es, bx
+	and bx, 0FFF8h
+	test [bx].DESCRPTR.lim_gr, 040h	;32 bit descritor?
+	jnz @F
+	;16bit: ch = ch*2 + 2
+	shl ch, 1
+	add ch, 2
+@@: ;32bit ch = 4 - ch*2
+	shl ch, 1
+	neg ch
+	add ch, 4
+	
+	pop ds
+	pop ebx
+	ret
+_I2f168A_Hdpmi_GetOprandSize endp
+
+; input:
+; 	bl: opcode
+; 	bh: oprand (if exist)
+; 	eax: in/out value
+;	ch: prefix (066h)
+; 	dx: port (or not used for immediate oprand)
+; 	es: trapped cs
+;return:
+; 	ebx: 0 if not handled, > 0 used to advance cs:eip 
+; 	eax for IN value if ebx > 0, otherwise not modified
 ; for ax/eax, need to check the descriptor type(16/32) of faulted cs sel, and the oprand size prefix 66h
-; we can assume a 32bit cs for dhpmi32 (and dpmi16 vice versa)
+; we can assume a 32bit cs for dhpmi32 (and dpmi16 vice versa) but it is not always the case.
 _I2f168A_Hdpmi_InOutExcHandler proc near public
 	pushad
-	lea ebp, [iotable + sizeof IOPORTTRAP * IOTP_COUNT]
-	xor ecx, ecx ;in=0
+	and ecx, 0100h ;CL:in=0, CH:prefix/count
 	cmp bl, 0E4h	;in al, imm8
+	mov ch, 1
 	je setdx
 	cmp bl, 0E5h	;in ax/eax, imm8
+	call _I2f168A_Hdpmi_GetOprandSize
 	je setdx
 	cmp bl, 0E6h	;out imm8, al
+	mov ch, 1
 	je setdxout
 	cmp bl, 0E7h	;out imm8, ax/eax
+	call _I2f168A_Hdpmi_GetOprandSize
 	je setdxout
 	cmp bl, 0ECh	;in al, dx
+	mov ch, 1
 	je dxset
 	cmp bl, 0EDh	;in ax/eax, dx
+	call _I2f168A_Hdpmi_GetOprandSize
 	je dxset
 	cmp bl, 0EEh	;out dx, al
+	mov ch, 1
 	je dxsetout
 	cmp bl, 0EFh	;out dx, ax/eax
+	call _I2f168A_Hdpmi_GetOprandSize
 	je dxsetout
 	mov [esp].PUSHADS.rEBX, 0
 	jmp _I2f168A_Hdpmi_InOutExcHandler_done ;nothing todo
 setdxout:
-	mov ecx, 1 ;out=1
+	mov cl, 1 ;out=1
 setdx:
 	xor dh, dh
 	mov dl, bh
 	mov [esp].PUSHADS.rEBX, 2 ;1 byte opcode + 1 byte oprand
+	mov ch, 1 ;count
 	jmp @F
 dxsetout:
-	mov ecx, 1
+	mov cl, 1
 dxset: ;dx already set
 	mov [esp].PUSHADS.rEBX, 1 ;1 byte opcode
 @@:
 	lea ebx, [iotable]
 tableloop:
-	cmp [ebx].IOPORTTRAP.ports, dx
+	cmp dx, [ebx].IOPORTTRAP.portS ;check dx(port) >= portS && dx(port)+count <= portE
+	jb tablenext
+	push dx
+	push cx
+	xor cl, cl
+	xchg cl, ch
+	add dx, cx
+	cmp dx, [ebx].IOPORTTRAP.portE
+	pop cx
+	pop dx
 	ja tablenext
-	cmp [ebx].IOPORTTRAP.porte, dx
-	jbe tablenext
 	jmp @F
 tablenext:
 	add ebx, sizeof IOPORTTRAP
-	cmp ebp, ebx
+	cmp ebx, offset iotable + sizeof IOPORTTRAP * IOTP_COUNT
 	jae _I2f168A_Hdpmi_InOutExcHandler_notfound ;not found in table
 	jmp tableloop
  _I2f168A_Hdpmi_InOutExcHandler_notfound:
@@ -316,19 +365,57 @@ tablenext:
 	jmp _I2f168A_Hdpmi_InOutExcHandler_done
 @@:
 	movzx edx, dx
+	movzx ebp, ch
+	xor ch, ch
+
+	pushf ;change IOPL flag to 3
+	or word ptr [esp], 03000h
+	popf
+
+	test cl, cl ;IN?
+	jnz portloop
+	mov [esp].PUSHADS.rEAX, 0
+
+portloop: ;iterate ports and do 1 byte at a time. don't handle ports across iotable entry
+	push eax ;those are not stack parameters, just save them
+	push edx
 	push ecx
-	; TODO: change IOPL flag to 3
-	; TODO: use errorcode to indicate operand size (byte/word/dw/string)
+	xor ch, ch
 	call far ptr [ebx].IOPORTTRAP.sel ;call the registerred handler, eax=val (out), edx=port, ecx=out. return eax for IN
 	pop ecx
-	test ecx, ecx ;don't save eax for OUT
-	jnz _I2f168A_Hdpmi_InOutExcHandler_done
-	mov [esp].PUSHADS.rEAX, eax ;save returned value to stack
+	push ecx
+
+	push eax
+	movzx eax, ch
+	imul ax, ax, 8
+	mov cl, al
+	pop eax
+	and eax, 0FFh ;eax = (eax&0xFF) << 8*ch
+	shl eax, cl
+
+	pop ecx
+	inc ch
+	pop edx
+	test cl, cl ;don't save eax for OUT
+	jnz @F
+	or [esp+4].PUSHADS.rEAX, eax ;IN: save returned value to stack
+	mov [esp], eax
+@@:
+	pop eax ;OUT, keep old eax
+	inc edx ;next port
+	dec ebp
+	jo _I2f168A_Hdpmi_InOutExcHandler_done
+	jmp portloop
+
+	pushf ;change IOPL flag to 0
+	and word ptr [esp], 0CFFFh
+	popf
 
 _I2f168A_Hdpmi_InOutExcHandler_done:
 	popad
 	ret
 _I2f168A_Hdpmi_InOutExcHandler endp
+endif
 
 _TEXT32 ends
 
