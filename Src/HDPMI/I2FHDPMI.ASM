@@ -265,12 +265,13 @@ if ?PMIOPL eq 0
 ;	CH
 ; return operand size in CH
 _I2f168A_Hdpmi_GetOprandSize proc near
+	pushf
 	push ebx
 	push ds
 
 	sldt bx
 	mov ds, bx
-	mov es, bx
+	mov bx, es
 	and bx, 0FFF8h
 	test [bx].DESCRPTR.lim_gr, 040h	;32 bit descritor?
 	jnz @F
@@ -284,6 +285,7 @@ _I2f168A_Hdpmi_GetOprandSize proc near
 	
 	pop ds
 	pop ebx
+	popf
 	ret
 _I2f168A_Hdpmi_GetOprandSize endp
 
