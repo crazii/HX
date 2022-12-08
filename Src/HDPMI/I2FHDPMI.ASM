@@ -32,7 +32,6 @@ _DATA16 segment
 traptable label byte
  IOPORTTRAP IOTP_COUNT dup(<>)
 _DATA16 ends
-
 endif
 
 _TEXT32 segment
@@ -266,6 +265,18 @@ _I2f168A_Hdpmi endp
 
 if ?PMIOPL eq 0
 
+IOPORTTRAPFRAME struct
+		dd ? ; EBX. local. match the entry of _I2f168A_Hdpmi_InOutExcHandler
+		dd ? ; ES. local. match the entry of _I2f168A_Hdpmi_InOutExcHandler
+		dd ? ; return addr of _I2f168A_Hdpmi_InOutExcHandler's caller
+rError	dd ? ; error code of 0D(#GP) except 
+rEIP	dd ? ; faulted eip
+rCSd	dd ? ; faulted cs
+rEFL	dd ? ; eflags
+rESP	dd ? ; ring 3 esp
+rSSd	dd ? ; ring 3 ss
+IOPORTTRAPFRAME ends
+
 ; get operande size from selector type (32/64) in ES, and prefix flag in CH (1 if has prefix, 0 if not)
 ; input:
 ;	BL opcode
@@ -330,12 +341,24 @@ _I2f168A_Hdpmi_GetOprandSize endp
 ; 	ebx: 0 if not handled, > 0 used to advance cs:eip 
 ; 	eax for IN value if ebx > 0, otherwise not modified
 ; for ax/eax, need to check the descriptor type(16/32) of faulted cs sel, and the oprand size prefix 66h
-; we can assume a 32bit cs for dhpmi32 (and dpmi16 vice versa) but it is not always the case.
+; note: keep esi/edi available for strring ops
 _I2f168A_Hdpmi_InOutExcHandler proc near public
-	pushad
 	push es
-	and ecx, 0100h ;CL:in=0, CH:prefix/count
+	push ebx ;end of IOPORTTRAPFRAME
+	xor ebx, ebx
+	pushad
+	xor ecx, ecx
 
+	mov ebx, [esp + sizeof PUSHADS].IOPORTTRAPFRAME.rCSd ;check instructions for IN/OUT. TODO: check [REP] INS/OUTS
+	mov es, bx
+	mov ebx, [esp + sizeof PUSHADS].IOPORTTRAPFRAME.rEIP
+	mov ebx, es:[ebx] 
+
+	cmp bl, 066h ;check prefix
+	jne @F
+	shr ebx, 8
+	mov ecx, 0100h ;ch=1, prefix used.
+@@:
 	cmp bl, 0E4h	;in al, imm8
 	je setdx
 	cmp bl, 0E5h	;in ax/eax, imm8
@@ -352,7 +375,6 @@ _I2f168A_Hdpmi_InOutExcHandler proc near public
 	je dxsetout
 	cmp bl, 0EFh	;out dx, ax/eax
 	je dxsetout
-	mov [esp].PUSHADS.rEBX, 0
 	jmp _I2f168A_Hdpmi_InOutExcHandler_done ;nothing todo
 setdxout:
 	mov cl, 1 ;out=1
@@ -360,25 +382,26 @@ setdx:
 	xor dh, dh ;set imm8 port to dx
 	mov dl, bh
 	add ch, 2  ;1 byte opcode + 1 byte oprand + prefix byte(if exist)
-	mov [esp].PUSHADS.rEBX, 0
 	mov byte ptr [esp].PUSHADS.rEBX, ch
+	sub ch, 2
 	jmp @F
 dxsetout:
 	mov cl, 1
 dxset: ;dx already set
 	add ch, 1 ;1 byte opcode + prefix byte(if exist)
-	mov [esp].PUSHADS.rEBX, 0
 	mov byte ptr [esp].PUSHADS.rEBX, ch
+	dec ch
 @@:
-	call _I2f168A_Hdpmi_GetOprandSize
+	call _I2f168A_Hdpmi_GetOprandSize ;get oprand size in ch (1/2/4) (al/ax/eax)
+	mov ebx, [esp + sizeof PUSHADS].IOPORTTRAPFRAME.rSSd ;load ring3 ss for later use
+	mov es, bx
 	lea ebx, [traptable]
 tableloop:
 	cmp dx, ss:[ebx].IOPORTTRAP.portS ;check port >= portS && port+count <= portE. don't handle ports across traptable entry
 	jb tablenext
 	push dx
 	push cx
-	xor cl, cl
-	xchg cl, ch
+	movzx cx, ch
 	add dx, cx
 	cmp dx, ss:[ebx].IOPORTTRAP.portE
 	pop cx
@@ -396,54 +419,57 @@ tablenext:
 @@:
 	movzx edx, dx
 	movzx ebp, ch
-	xor ch, ch
+	xor ch, ch ; counter:0
 
 	test cl, cl ;IN?
 	jnz portloop
 	mov [esp].PUSHADS.rEAX, 0
 
 portloop: ;iterate ports and do 1 byte at a time.
-	push eax ;those are not stack parameters, just save them
 	push edx
-	push ecx ; esp + 12
+	push ecx
 	xor ch, ch
 
-	;call the registerred handler, eax=val (out), edx=port, ecx=out. return eax for IN (compatible parameters for EMM386)
-	;temporary code. TODO: put cs:back2ring0 and a ring 3 return address(cs3:_I2f168A_Hdpmi_InOutExcHandlerWrapper) onto the ring 3 stack.
-	push dword ptr [esp + sizeof PUSHADS + 12 + 4 + 4 + 8 + 4 + 4] ;ring 3 ss: 12 + ret addr + errorcode + eip_cs + eflags + esp
-	pop es
-	push es
-	push dword ptr [esp + sizeof PUSHADS + 12 + 4 + 4 + 8 + 4 + 4] ;ring 3 esp. last stack ptr -4 +4 (newly pushed dword)
-	push dword ptr [esp + sizeof PUSHADS + 12 + 4 + 4 + 8 + 4 + 4] ;eflags
+	;call the registerred handler by simluate a IRET frame.
+	;INPUT: eax=val (out), edx=port, ecx=out. 
+	;OUTPUT: return eax for IN, or original eax for OUT (compatible parameters for EMM386)
+	push es ;ring 3 ss
+	push [esp + sizeof PUSHADS + 8 + 4].IOPORTTRAPFRAME.rESP ;ring 3 esp  (skip pushad + edx + ecx on stack)
+	push [esp + sizeof PUSHADS + 8 + 4 + 4].IOPORTTRAPFRAME.rEFL ;eflags
 	or dword ptr [esp], 03000h ;change IOPL to 3
-	push ss:[ebx].IOPORTTRAP.sel
+	push dword ptr ss:[ebx].IOPORTTRAP.sel
 	push ss:[ebx].IOPORTTRAP.off
 
-	iret
+	;put cs:back2ring0 and a ring 3 return address(cs3:_I2f168A_Hdpmi_InOutExcHandlerWrapper) onto the ring 3 stack
+	;so that the port trap handler can return to back2ring0 with RETF
+	push ebx
+	mov ebx, [esp+16] ;load ring3 esp
+	mov word ptr es:[ebx-4], cs
+	mov dword ptr es:[ebx-8], offset back2ring0
+	mov word ptr es:[ebx-12], _CSR3SEL_
+	;push byte ptr _CSR3SEL_
+	;pop dword ptr es:[ebx-12]
+	mov dword ptr es:[ebx-16], offset _I2f168A_Hdpmi_InOutExcHandlerWrapper
+	sub dword ptr [esp+16], 16
+	pop ebx
+
+	iretd
 back2ring0:
 	add esp, 16 ; clear call stack, not needed
-	;temporary code end
+
+	mov ecx, [esp]
+	movzx cx, ch
+	imul cx, cx, 8
+	and eax, 0FFh ;eax = (eax&0xFF) << 8*ch.
+	shl eax, cl ; for an OUT instruction, eax should not change by handler, so that we shift both in/out data here
 
 	pop ecx
-	push ecx
-
-	push eax
-	movzx eax, ch
-	imul ax, ax, 8
-	mov cl, al
-	pop eax
-	and eax, 0FFh ;eax = (eax&0xFF) << 8*ch
-	shl eax, cl
-
-	pop ecx
-	inc ch
+	inc ch ;counter
 	pop edx
 	test cl, cl ;don't save eax for OUT
 	jnz @F
-	or [esp+4].PUSHADS.rEAX, eax ;IN: save returned value to stack
-	mov [esp], eax
+	or [esp].PUSHADS.rEAX, eax ;IN: save returned value to stack
 @@:
-	pop eax ;OUT, keep old eax
 	inc edx ;next port
 	dec ebp
 	jo @F
@@ -454,9 +480,16 @@ back2ring0:
 	popf
 
 _I2f168A_Hdpmi_InOutExcHandler_done:
-	pop es
 	popad
+	add [esp].IOPORTTRAPFRAME.rEIP, ebx ;advance (e)ip
+	test ebx, ebx
+	pop ebx
+	pop es
+	jnz @F
 	ret
+@@:
+	add esp, 8 ;skip return addr + error code
+	iretd
 _I2f168A_Hdpmi_InOutExcHandler endp
 endif
 
