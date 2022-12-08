@@ -212,35 +212,6 @@ ends
 EXCFRX ends
 
 _exceptX proc public
-
- if ?PMIOPL eq 0
-	cmp [esp].EXCFRX.wExcNo, 0Dh ;#GP?
-	jne @F
-	push ecx
-	push ebx
-	push es
-	mov ebx, [esp+8].EXCFRX.rCS
-	mov es, bx
-	mov ebx, [esp+8].EXCFRX.rEIP
-	mov ebx, es:[ebx] ;check instructions for IN/OUT. TODO: check [REP] INS/OUTS
-	xor ecx, ecx
-	cmp bl, 066h
-	jne @F
-	shr ebx, 8
-	mov ecx, 0100h ;ch=1
-@@:
-	call _I2f168A_Hdpmi_InOutExcHandler
-	add [esp].EXCFRX.rEIP, ebx ;advance (e)ip
-	test ebx, ebx
-	pop es
-	pop ebx
-	pop ecx
-	jz @F
-	add esp, 4 ; pop error code
-	iret
-@@:
- endif
-
 	cld
 	sub esp, 3*4	;12		;make room for a R3FAULT32 item
 	push ebp		;+4=16

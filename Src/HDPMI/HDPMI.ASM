@@ -2746,6 +2746,34 @@ if 0
 	pop eax
 	pop ebp
 endif
+
+ if ?PMIOPL eq 0
+	push ecx
+	push ebx
+	push es ;12
+
+	mov ebx, [esp+20] ;CS: 12 + errorcode + iep
+	mov es, bx
+	mov ebx, [esp+16] ;EIP: 12 + errorcode
+	mov ebx, es:[ebx] ;check instructions for IN/OUT. TODO: check [REP] INS/OUTS
+	xor ecx, ecx
+	cmp bl, 066h
+	jne @F
+	shr ebx, 8
+	mov ecx, 0100h ;ch=1
+@@:
+	call _I2f168A_Hdpmi_InOutExcHandler
+	add [esp+16], ebx ;advance (e)ip
+	test ebx, ebx
+	pop es
+	pop ebx
+	pop ecx
+	jz @F
+	add esp, 4 ; pop error code
+	iret
+@@:
+ endif
+
 	@testexception exc0D, exc0Dx
 	@simintlpms 0D
 exc0D:
