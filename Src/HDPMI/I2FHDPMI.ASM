@@ -333,6 +333,7 @@ _I2f168A_Hdpmi_GetOprandSize endp
 ; we can assume a 32bit cs for dhpmi32 (and dpmi16 vice versa) but it is not always the case.
 _I2f168A_Hdpmi_InOutExcHandler proc near public
 	pushad
+	push es
 	and ecx, 0100h ;CL:in=0, CH:prefix/count
 
 	cmp bl, 0E4h	;in al, imm8
@@ -407,15 +408,20 @@ portloop: ;iterate ports and do 1 byte at a time.
 	push ecx ; esp + 12
 	xor ch, ch
 
-	;call the registerred handler, eax=val (out), edx=port, ecx=out. return eax for IN
-	;temporary code. TODO: need put a ring 3 return address onto the ring 3 stack.
+	;call the registerred handler, eax=val (out), edx=port, ecx=out. return eax for IN (compatible parameters for EMM386)
+	;temporary code. TODO: put cs:back2ring0 and a ring 3 return address(cs3:_I2f168A_Hdpmi_InOutExcHandlerWrapper) onto the ring 3 stack.
 	push dword ptr [esp + sizeof PUSHADS + 12 + 4 + 4 + 8 + 4 + 4] ;ring 3 ss: 12 + ret addr + errorcode + eip_cs + eflags + esp
+	pop es
+	push es
 	push dword ptr [esp + sizeof PUSHADS + 12 + 4 + 4 + 8 + 4 + 4] ;ring 3 esp. last stack ptr -4 +4 (newly pushed dword)
 	push dword ptr [esp + sizeof PUSHADS + 12 + 4 + 4 + 8 + 4 + 4] ;eflags
-	or [esp], 03000h ;change IOPL to 3
+	or dword ptr [esp], 03000h ;change IOPL to 3
 	push ss:[ebx].IOPORTTRAP.sel
 	push ss:[ebx].IOPORTTRAP.off
+
 	iret
+back2ring0:
+	add esp, 16 ; clear call stack, not needed
 	;temporary code end
 
 	pop ecx
@@ -448,12 +454,26 @@ portloop: ;iterate ports and do 1 byte at a time.
 	popf
 
 _I2f168A_Hdpmi_InOutExcHandler_done:
+	pop es
 	popad
 	ret
 _I2f168A_Hdpmi_InOutExcHandler endp
 endif
 
 _TEXT32 ends
+
+
+_TEXT32R3 segment
+
+_I2f168A_Hdpmi_InOutExcHandlerWrapper proc near ;handler exiting wrapper, need a far return from handler
+
+	add esp, 8 ;need pop the stack
+	call fword ptr [esp-8] ;call back to ring 0
+
+_I2f168A_Hdpmi_InOutExcHandlerWrapper endp
+
+_TEXT32R3 ends
+
 
 endif
 
