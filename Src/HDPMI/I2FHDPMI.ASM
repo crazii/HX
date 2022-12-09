@@ -468,6 +468,7 @@ portloop: ;iterate ports and do 1 byte at a time.
 	push ebp ;ring 3 esp
 	push es:[ebp + 8 + sizeof PUSHADS].IOPORTTRAPFRAME.rEFL ;eflags (skip pushad + edx + ecx on stack)
 	or dword ptr [esp], 03000h ;change IOPL to 3
+	and dword ptr [esp], not 0200h ;disable interrupt
 	push dword ptr ss:[ebx].IOPORTTRAP.sel
 	push ss:[ebx].IOPORTTRAP.off
 	push dword ptr ss:[ebx].IOPORTTRAP.dsel
