@@ -108,6 +108,10 @@ _I2f168A_Msdos proto near
 if ?VENDORAPI
 _I2f168A_Hdpmi proto near
 endif
+if ?PMIOPL eq 0
+_I2f168A_Hdpmi_InOutExcHandler proto near
+_I2f168A_Hdpmi_InOutExcHandlerWrapper proto near
+endif
 _vxd_0001 proto near
 _vxd_0009 proto near
 _vxd_0017 proto near
@@ -260,8 +264,8 @@ if ?VENDORAPI
 externdef _I2F168A_HDPMI:abs
 endif
 if ?PMIOPL eq 0
-externdef _I2f168A_Hdpmi_InOutExcHandler:abs
-externdef _I2f168A_Hdpmi_InOutExcHandlerWrapper:abs
+externdef _I2f168A_Hdpmi_InOutExcHandler_back:abs
+externdef _I2F168A_HDPMI_IOTP_BACK:abs
 endif
 externdef _I2F1684_0001_:abs
 externdef _I2F1684_0009_:abs

@@ -444,18 +444,16 @@ portloop: ;iterate ports and do 1 byte at a time.
 	;so that the port trap handler can return to back2ring0 with RETF
 	push ebx
 	mov ebx, [esp+16] ;load ring3 esp
-	mov word ptr es:[ebx-4], cs
-	mov dword ptr es:[ebx-8], offset back2ring0
+	mov word ptr es:[ebx-4], _INTSEL_
+	mov dword ptr es:[ebx-8], _I2F168A_HDPMI_IOTP_BACK
 	mov word ptr es:[ebx-12], _CSR3SEL_
-	;push byte ptr _CSR3SEL_
-	;pop dword ptr es:[ebx-12]
 	mov dword ptr es:[ebx-16], offset _I2f168A_Hdpmi_InOutExcHandlerWrapper
 	sub dword ptr [esp+16], 16
 	pop ebx
 
 	iretd
-back2ring0:
-	add esp, 16 ; clear call stack, not needed
+_I2f168A_Hdpmi_InOutExcHandler_back::
+	add esp, 20 ; clear call stack, not needed
 
 	mov ecx, [esp]
 	movzx cx, ch
@@ -496,7 +494,7 @@ endif
 _TEXT32 ends
 
 
-_TEXT32R3 segment
+_TEXT32R3 segment dword ?USE32 public ?CODER3
 
 _I2f168A_Hdpmi_InOutExcHandlerWrapper proc near ;handler exiting wrapper, need a far return from handler
 

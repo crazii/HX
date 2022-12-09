@@ -856,6 +856,9 @@ if ?INT21API
 endif
 if ?VENDORAPI
 	@defx _I2f168A_Hdpmi, _I2F168A_HDPMI	;"HDPMI" DPMI extensions entry (retf)
+if ?PMIOPL eq 0
+	@defx _I2f168A_Hdpmi_InOutExcHandler_back, _I2F168A_HDPMI_IOTP_BACK
+endif
 endif
 if ?SUPI2F16840001
 	@defx _vxd_0001, _I2F1684_0001_
