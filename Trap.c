@@ -55,22 +55,27 @@ int InstallTrap(const ENTRY* entry, int start, int end, void(*handler)(void))
 {
     int handle = 0;
     int count = end - start + 1;
+    const ENTRY ent = *entry; //avoid gcc using ebx
     asm(
+    "push %%ebx \n\t"
     "push %%esi \n\t"
     "push %%edi \n\t"
     "mov %1, %%esi \n\t"
     "mov %2, %%edi \n\t"
     "xor %%ecx, %%ecx \n\t"
     "mov %%cs, %%cx \n\t"
+    "mov %%ds, %%bx \n\t"
     "mov %3, %%edx \n\t"
     "mov $6, %%eax \n\t" //ax=6, port trap
     "lcall *%4\n\t"
+    "pop %%edi \n\t"
+    "pop %%esi \n\t"
+    "pop %%ebx \n\t"
     "jc 1f \n\t"
     "mov %%eax, %0 \n\t"
-    "1: pop %%edi \n\t"
-    "pop %%esi \n\t"
+    "1: nop \n\t"
     :"=m"(handle)
-    :"m"(start),"m"(count),"m"(handler),"m"(*entry)
+    :"m"(start),"m"(count),"m"(handler),"m"(ent)
     :"eax","ecx","edx"
     );
     return handle;

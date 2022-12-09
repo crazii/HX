@@ -24,6 +24,7 @@ portS dw -1
 portE dw -1
 off dd -1
 sel dw -1
+dsel dw -1
 IOPORTTRAP ends
 
 IOTP_COUNT equ 4
@@ -79,6 +80,7 @@ tab168a label word
 
 ;--- ax= 6: alloc IO port trap
 ;---        cx:e/dx = ring3 exception handler?
+;---        bx = ring3 exception handler data seg
 ;---        si = port start
 ;---        di = number of ports
 ;---        out: NC if ok, handle in eax
@@ -185,7 +187,7 @@ test2:
 	je test3
 	jmp fail_0006
 test3:
-	cmp word ptr ss:[ebx + 8], 0FFFFh
+	cmp dword ptr ss:[ebx + 8], 0FFFFFFFFh
 	je @F
 	add ebx, sizeof IOPORTTRAP
 	cmp ebx, offset traptable + sizeof IOPORTTRAP * IOTP_COUNT
@@ -204,6 +206,8 @@ fail_0006:
 	mov ss:[ebx].IOPORTTRAP.sel, ax
 	mov eax, [esp].PUSHADS.rEDX
 	mov ss:[ebx].IOPORTTRAP.off, eax
+	mov eax, [esp].PUSHADS.rEBX
+	mov ss:[ebx].IOPORTTRAP.dsel, ax
 	mov eax, ebx ;use table entry addr as handle
 	clc
 
@@ -248,7 +252,7 @@ fail_0007:
 
 	mov dword ptr ss:[edx], 0FFFFFFFFh
 	mov dword ptr ss:[edx+4], 0FFFFFFFFh
-	mov word ptr ss:[edx+8], 0FFFFh
+	mov dword ptr ss:[edx+8], 0FFFFFFFFh
 	clc
 done_0007:
 	popad
@@ -268,6 +272,7 @@ if ?PMIOPL eq 0
 IOPORTTRAPFRAME struct
 rEBX	dd ? ; EBX. local. match the entry of _I2f168A_Hdpmi_InOutExcHandler
 rES		dd ? ; ES. local. match the entry of _I2f168A_Hdpmi_InOutExcHandler
+rDS		dd ? ; DS. local.
 		dd ? ; return addr of _I2f168A_Hdpmi_InOutExcHandler's caller
 rError	dd ? ; error code of 0D(#GP) except 
 rEIP	dd ? ; faulted eip
@@ -342,6 +347,7 @@ _I2f168A_Hdpmi_GetOprandSize endp
 ; 	eax for IN value if ebx > 0, otherwise not modified
 ; for ax/eax, need to check the descriptor type(16/32) of faulted cs sel, and the oprand size prefix 66h
 _I2f168A_Hdpmi_InOutExcHandler proc near public
+	push ds
 	push es
 	push ebx ;end of IOPORTTRAPFRAME
 	xor ebx, ebx
@@ -464,9 +470,11 @@ portloop: ;iterate ports and do 1 byte at a time.
 	or dword ptr [esp], 03000h ;change IOPL to 3
 	push dword ptr ss:[ebx].IOPORTTRAP.sel
 	push ss:[ebx].IOPORTTRAP.off
+	push dword ptr ss:[ebx].IOPORTTRAP.dsel
+	pop ds
 
 	;put _I2f168A_Hdpmi_InOutExcHandler_back and a ring 3 return address(cs3:_I2f168A_Hdpmi_InOutExcHandlerWrapper) onto the ring 3 stack
-	;so that the port trap handler can return to back2ring0 with RETF
+	;so that the port trap handler can return to _I2f168A_Hdpmi_InOutExcHandler_back with RETF
 	push ebx
 	mov ebx, ebp ;load ring3 esp
 	mov word ptr es:[ebx-4], _INTSEL_
@@ -494,7 +502,7 @@ _I2f168A_Hdpmi_InOutExcHandler_back::
 	or es:[ebp+8].PUSHADS.rEAX, eax ;IN: save returned value to stack
 	mov ecx, es:[ebp]
 @@:
-	shr eax, 8 ; OUT: for an OUT instruction, eax should not change by handler. TODO: save eax
+	shr eax, 8 ; OUT: for an OUT instruction, eax should not be changed by handler. TODO: save eax
 	inc ch ;counter
 	mov es:[ebp], ecx
 	movzx ecx, cl
@@ -503,13 +511,12 @@ _I2f168A_Hdpmi_InOutExcHandler_back::
 	mov es:[ebp+4], edx
 	dec esi
 	jnz portloop
-@@:
+
 	pushf ;change IOPL flag to 0
 	and word ptr [esp], 0CFFFh
 	popf
 
 	;copy ring3 stack back to ring0 stack
-	mov bx, ds
 	push es ;ds:esi
 	pop ds
 	lea esi, [ebp + 8]
@@ -525,7 +532,6 @@ _I2f168A_Hdpmi_InOutExcHandler_back::
 	lodsd
 	stosd
 	loop @B
-	mov ds, bx
 
 _I2f168A_Hdpmi_InOutExcHandler_done:
 	popad
@@ -533,6 +539,7 @@ _I2f168A_Hdpmi_InOutExcHandler_done:
 	test ebx, ebx
 	pop ebx
 	pop es
+	pop ds
 	jnz @F
 	ret
 @@:
