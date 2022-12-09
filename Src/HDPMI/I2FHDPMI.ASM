@@ -480,7 +480,6 @@ portloop: ;iterate ports and do 1 byte at a time.
 _I2f168A_Hdpmi_InOutExcHandler_back::
 	add esp, 20 ; clear call stack, not needed
 
-	mov edx, es:[ebp+4]
 	mov ecx, es:[ebp]
 	test cl, cl ;don't save eax for OUT
 	jnz @F
@@ -488,20 +487,20 @@ _I2f168A_Hdpmi_InOutExcHandler_back::
 	imul cx, cx, 8
 	and eax, 0FFh ;eax = (eax&0xFF) << 8*ch.
 	shl eax, cl
-	push ebx
-	mov ebx, 0FFh
-	shl ebx, cl
-	not ebx
-	and es:[ebp+8].PUSHADS.rEAX, ebx
+	mov edx, 0FFh
+	shl edx, cl
+	not edx
+	and es:[ebp+8].PUSHADS.rEAX, edx
 	or es:[ebp+8].PUSHADS.rEAX, eax ;IN: save returned value to stack
-	pop ebx
 	mov ecx, es:[ebp]
 @@:
 	shr eax, 8 ; OUT: for an OUT instruction, eax should not change by handler. TODO: save eax
 	inc ch ;counter
 	mov es:[ebp], ecx
 	movzx ecx, cl
+	mov edx, es:[ebp+4]
 	inc edx ;next port
+	mov es:[ebp+4], edx
 	dec esi
 	jnz portloop
 @@:
