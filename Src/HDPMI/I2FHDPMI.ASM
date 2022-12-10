@@ -27,6 +27,7 @@ sel dw -1
 dsel dw -1
 IOPORTTRAP ends
 
+;--- in a first step, it might be sufficient to have static storage for 4 port ranges.
 IOTP_COUNT equ 4
 
 _DATA16 segment
@@ -174,8 +175,7 @@ is0006:
 	inc esi
 	loop @B
 
-;--- todo: store handler routines and return handle in eax
-;--- in a first step, it might be sufficient to have static storage for 4 port ranges.
+;--- store handler routines and return handle in eax
 	sub esi, edi
 	lea ebx, [traptable]
 @@:
@@ -291,11 +291,11 @@ IOPORTTRAPFRAME ends
 _I2f168A_Hdpmi_GetOprandSize proc near
 	pushf
 
-	test bl, 01h ;0E5 0E7 0ED 0EF ?
+	test bl, 01h ;0E5 0E7 0ED 0EF ? (AL)
 	jnz @F
 	mov ch, 1
 	jmp _I2f168A_Hdpmi_GetOprandSize_End
-@@:
+@@: ;for AX/EAX, need to check the descriptor type(16/32) of faulted cs sel, and the oprand size prefix 66h
 	push ebx
 	push eax
 	push ds
@@ -335,10 +335,9 @@ _I2f168A_Hdpmi_GetOprandSize_End:
 	ret
 _I2f168A_Hdpmi_GetOprandSize endp
 
-;return:
-; 	ebx: 0 if not handled, > 0 used to advance cs:eip 
-; 	eax for IN value if ebx > 0, otherwise not modified
-; for ax/eax, need to check the descriptor type(16/32) of faulted cs sel, and the oprand size prefix 66h
+;check falted CS:EIP if it is IN/OUT instruction
+;and find the port operand in traptable to call the handler
+;finnally advance EIP with opcode size to skip the instruction and return to client execution
 _I2f168A_Hdpmi_InOutExcHandler proc near public
 	push ds
 	push es
@@ -463,7 +462,7 @@ portloop: ;iterate ports and do 1 byte at a time.
 	push es ;ring 3 ss
 	push ebp ;ring 3 esp
 	push es:[ebp + 8 + sizeof PUSHADS].IOPORTTRAPFRAME.rEFL ;eflags (skip pushad + edx + ecx on stack)
-	or dword ptr [esp], 03000h ;change IOPL to 3
+	or dword ptr [esp], 03000h ;change IOPL to 3. Allow handler to do the actually port IO if needed, otherwise it's a recursion
 	and dword ptr [esp], not 0200h ;disable interrupt
 	push dword ptr ss:[ebx].IOPORTTRAP.sel
 	push ss:[ebx].IOPORTTRAP.off
@@ -484,7 +483,7 @@ portloop: ;iterate ports and do 1 byte at a time.
 	push ds
 	pop es
 
-	iretd
+	iretd ;execution path will eventually get to _I2f168A_Hdpmi_InOutExcHandler_back
 _I2f168A_Hdpmi_InOutExcHandler_back::
 	add esp, 20 ; clear call stack, not needed
 
@@ -558,7 +557,7 @@ _I2f168A_Hdpmi_InOutExcHandlerWrapper proc near ;handler exiting wrapper, need a
 	push ss
 	pop es ;restore ring3 ss to es for ring0 access
 	add esp, 8 ;need pop the stack
-	call fword ptr [esp-8] ;call back to ring 0
+	call fword ptr [esp-8] ;call back to ring 0 (_I2f168A_Hdpmi_InOutExcHandler_back)
 
 _I2f168A_Hdpmi_InOutExcHandlerWrapper endp
 
