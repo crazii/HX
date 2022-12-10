@@ -12,6 +12,7 @@ typedef struct VendorEntry
 }ENTRY;
 
 static const int DEBUG_IN = 0x0addface;
+static int DEBUG_OUT = 0;
 
 int trap(void)
 {
@@ -23,6 +24,11 @@ int trap(void)
     :"=m"(port),"=m"(out),"=m"(value)
     ::"memory"
     );
+    if(out)
+    {
+        DEBUG_OUT &= ~(0xFF << (port-0x388)*8);
+        DEBUG_OUT |= (value&0xFF) << ((port-0x388)*8);
+    }
     return (!out) ? (DEBUG_IN >> (port-0x388)*8) : value;
 }
 
@@ -32,23 +38,64 @@ void __attribute__((naked)) trap_wrapper(void)
     asm("lret"); //retf
 }
 
-void test()
+void test1()
 {
-    //test cases
+    DEBUG_OUT = 0x5A5A5A5A;
+    asm("mov $0x388, %dx \n\t"
+    "mov $0xdeadbeef, %eax \n\t"
+    "out %al, %dx \n\t");
+    printf("OUT dx, al: %08x\n", DEBUG_OUT);
+}
+
+void test2()
+{
+    DEBUG_OUT = 0x5A5A5A5A;
+    asm("mov $0x388, %dx \n\t"
+    "mov $0xdeadbeef, %eax \n\t"
+    "out %ax, %dx \n\t");
+    printf("OUT dx, ax: %08x\n", DEBUG_OUT);
+}
+
+void test3()
+{
+    DEBUG_OUT = 0x5A5A5A5A;
+    asm("mov $0x388, %dx \n\t"
+    "mov $0xdeadbeef, %eax \n\t"
+    "out %eax, %dx \n\t");
+    printf("OUT dx, eax: %08x\n", DEBUG_OUT);
+}
+
+void test4()
+{
     int val = 0;
-    asm(
-    "mov $0x388, %%dx \n\t"
-    "mov $0xdeadbeef, %%eax \n\t"
-    //"out %%al, %%dx \n\t"
-    //"out %%ax, %%dx \n\t"
-    //"out %%eax, %%dx \n\t"
-    //"in %%dx, %%al \n\t"
-    //"in %%dx, %%ax \n\t"
+    asm("mov $0x388, %%dx \n\t"
+    "mov $0xA5A5A5A5, %%eax \n\t"
+    "in %%dx, %%al \n\t"
+    "mov %%eax, %0 \n\t"
+    : "=m"(val));
+    printf("IN al, dx: %08x\n", val);
+}
+
+void test5()
+{
+    int val = 0;
+    asm("mov $0x388, %%dx \n\t"
+    "mov $0xA5A5A5A5, %%eax \n\t"
+    "in %%dx, %%ax \n\t"
+    "mov %%eax, %0 \n\t"
+    : "=m"(val));
+    printf("IN ax, dx: %08x\n", val);
+}
+
+void test6()
+{
+    int val = 0;
+    asm("mov $0x388, %%dx \n\t"
+    "mov $0xA5A5A5A5, %%eax \n\t"
     "in %%dx, %%eax \n\t"
     "mov %%eax, %0 \n\t"
-    : "=m"(val)
-    );
-    printf("IN eax, dx: %08x", val);
+    : "=m"(val));
+    printf("IN eax, dx: %08x\n", val);
 }
 
 int InstallTrap(const ENTRY* entry, int start, int end, void(*handler)(void))
@@ -133,9 +180,14 @@ int main()
     }
 
     #if 1 //debug addr break
-    printf("FUNC ADDR: %08x\n", csbase + (uintptr_t)&test);
+    printf("FUNC ADDR: %08x\n", csbase + (uintptr_t)&test1);
     system("pause");
     #endif
-    test();
+    test1();
+    test2();
+    test3();
+    test4();
+    test5();
+    test6();
     return 0;
 }
