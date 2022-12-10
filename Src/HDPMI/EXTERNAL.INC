@@ -110,7 +110,6 @@ _I2f168A_Hdpmi proto near
 endif
 if ?PMIOPL eq 0
 _I2f168A_Hdpmi_InOutExcHandler proto near
-_I2f168A_Hdpmi_InOutExcHandlerWrapper proto near
 endif
 _vxd_0001 proto near
 _vxd_0009 proto near

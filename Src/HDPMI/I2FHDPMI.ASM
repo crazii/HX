@@ -284,10 +284,10 @@ IOPORTTRAPFRAME ends
 
 ; get operande size from selector type (32/64) in ES, and prefix flag in CH (1 if has prefix, 0 if not)
 ; input:
-;	BL opcode
-;	ES
-;	CH
-; return operand size in CH
+;	BL: instruction
+;	ES: client CS
+;	CH: 66h prefix (1: with prefix, 0: without prefix)
+; return operand size (1/2/4) in CH
 _I2f168A_Hdpmi_GetOprandSize proc near
 	pushf
 
@@ -467,24 +467,24 @@ portloop: ;iterate ports and do 1 byte at a time.
 	push dword ptr ss:[ebx].IOPORTTRAP.sel
 	push ss:[ebx].IOPORTTRAP.off
 
-	;put _I2f168A_Hdpmi_InOutExcHandler_back and a ring 3 return address(cs3:_I2f168A_Hdpmi_InOutExcHandlerWrapper) onto the ring 3 stack
+	;put _I2f168A_Hdpmi_InOutExcHandler_back onto the ring 3 stack
 	;so that the port trap handler can return to _I2f168A_Hdpmi_InOutExcHandler_back with RETF
 	push ebx
 	mov ebx, ebp ;load ring3 esp
 	mov word ptr es:[ebx-4], _INTSEL_
 	mov dword ptr es:[ebx-8], _I2F168A_HDPMI_IOTP_BACK
-	mov word ptr es:[ebx-12], _CSR3SEL_
-	mov dword ptr es:[ebx-16], offset _I2f168A_Hdpmi_InOutExcHandlerWrapper
-	sub dword ptr [esp+16], 16 ;ebp -= 16
+	sub dword ptr [esp+16], 8 ;ring 3 esp -= 8
 	pop ebx
 
-	;need set es too, or something will be wrong. es will be restored in _I2f168A_Hdpmi_InOutExcHandlerWrapper
+	;need set es too, or something will be wrong.
 	;the handler can set its own SS:ESP or use trapped client's stack
 	push ds
 	pop es
 
 	iretd ;execution path will eventually get to _I2f168A_Hdpmi_InOutExcHandler_back
 _I2f168A_Hdpmi_InOutExcHandler_back::
+	push [esp + 16] ; restore ring3 SS
+	pop es
 	add esp, 20 ; clear call stack, not needed
 
 	mov ecx, es:[ebp]
@@ -548,20 +548,6 @@ _I2f168A_Hdpmi_InOutExcHandler endp
 endif
 
 _TEXT32 ends
-
-
-_TEXT32R3 segment dword ?USE32 public ?CODER3
-
-_I2f168A_Hdpmi_InOutExcHandlerWrapper proc near ;handler exiting wrapper, need a far return from handler
-
-	push ss
-	pop es ;restore ring3 ss to es for ring0 access
-	add esp, 8 ;need pop the stack
-	call fword ptr [esp-8] ;call back to ring 0 (_I2f168A_Hdpmi_InOutExcHandler_back)
-
-_I2f168A_Hdpmi_InOutExcHandlerWrapper endp
-
-_TEXT32R3 ends
 
 
 endif
