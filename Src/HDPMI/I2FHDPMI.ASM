@@ -335,13 +335,6 @@ _I2f168A_Hdpmi_GetOprandSize_End:
 	ret
 _I2f168A_Hdpmi_GetOprandSize endp
 
-; input:
-; 	bl: opcode
-; 	bh: oprand (if exist)
-; 	eax: in/out value
-;	ch: prefix (066h)
-; 	dx: port (or not used for immediate oprand)
-; 	es: trapped cs
 ;return:
 ; 	ebx: 0 if not handled, > 0 used to advance cs:eip 
 ; 	eax for IN value if ebx > 0, otherwise not modified
@@ -386,14 +379,14 @@ setdxout:
 setdx:
 	xor dh, dh ;set imm8 port to dx
 	mov dl, bh
-	add ch, 2  ;1 byte opcode + 1 byte oprand + prefix byte(if exist)
+	add ch, 2  ;1 byte op + 1 byte oprand(imm8) + prefix byte(if exist)
 	mov byte ptr [esp].PUSHADS.rEBX, ch
 	sub ch, 2
 	jmp @F
 dxsetout:
 	mov cl, 1
 dxset: ;dx already set
-	inc ch ;1 byte opcode + prefix byte(if exist)
+	inc ch ;1 byte op + prefix byte(if exist)
 	mov byte ptr [esp].PUSHADS.rEBX, ch
 	dec ch
 @@:
@@ -459,6 +452,9 @@ tablenext:
 	mov es:[ebp-8], ecx
 	sub ebp, 8
 
+	push dword ptr ss:[ebx].IOPORTTRAP.dsel
+	pop ds
+
 portloop: ;iterate ports and do 1 byte at a time.
 
 	;call the registerred handler by simluate a IRET frame.
@@ -471,8 +467,6 @@ portloop: ;iterate ports and do 1 byte at a time.
 	and dword ptr [esp], not 0200h ;disable interrupt
 	push dword ptr ss:[ebx].IOPORTTRAP.sel
 	push ss:[ebx].IOPORTTRAP.off
-	push dword ptr ss:[ebx].IOPORTTRAP.dsel
-	pop ds
 
 	;put _I2f168A_Hdpmi_InOutExcHandler_back and a ring 3 return address(cs3:_I2f168A_Hdpmi_InOutExcHandlerWrapper) onto the ring 3 stack
 	;so that the port trap handler can return to _I2f168A_Hdpmi_InOutExcHandler_back with RETF
@@ -485,6 +479,11 @@ portloop: ;iterate ports and do 1 byte at a time.
 	sub dword ptr [esp+16], 16 ;ebp -= 16
 	pop ebx
 
+	;need set es too, or something will be wrong. es will be restored in _I2f168A_Hdpmi_InOutExcHandlerWrapper
+	;the handler can set its own SS:ESP or use trapped client's stack
+	push ds
+	pop es
+
 	iretd
 _I2f168A_Hdpmi_InOutExcHandler_back::
 	add esp, 20 ; clear call stack, not needed
@@ -493,7 +492,7 @@ _I2f168A_Hdpmi_InOutExcHandler_back::
 	test cl, cl ;don't save eax for OUT
 	jnz @F
 	movzx cx, ch ;IN
-	imul cx, cx, 8
+	shl cx, 3;imul cx, cx, 8
 	and eax, 0FFh ;eax = (eax&0xFF) << 8*ch.
 	shl eax, cl
 	mov edx, 0FFh
@@ -556,6 +555,8 @@ _TEXT32R3 segment dword ?USE32 public ?CODER3
 
 _I2f168A_Hdpmi_InOutExcHandlerWrapper proc near ;handler exiting wrapper, need a far return from handler
 
+	push ss
+	pop es ;restore ring3 ss to es for ring0 access
 	add esp, 8 ;need pop the stack
 	call fword ptr [esp-8] ;call back to ring 0
 
