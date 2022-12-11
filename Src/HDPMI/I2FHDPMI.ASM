@@ -451,7 +451,7 @@ tablenext:
 	mov es:[ebp-8], ecx
 	sub ebp, 8
 
-	push dword ptr ss:[ebx].IOPORTTRAP.dsel
+	push dword ptr ss:[ebx].IOPORTTRAP.dsel ;setup handler DS
 	pop ds
 
 portloop: ;iterate ports and do 1 byte at a time.
@@ -469,14 +469,11 @@ portloop: ;iterate ports and do 1 byte at a time.
 
 	;put _I2f168A_Hdpmi_InOutExcHandler_back onto the ring 3 stack
 	;so that the port trap handler can return to _I2f168A_Hdpmi_InOutExcHandler_back with RETF
-	push ebx
-	mov ebx, ebp ;load ring3 esp
-	mov word ptr es:[ebx-4], _INTSEL_
-	mov dword ptr es:[ebx-8], _I2F168A_HDPMI_IOTP_BACK
-	sub dword ptr [esp+16], 8 ;ring 3 esp -= 8
-	pop ebx
+	mov word ptr es:[ebp-4], _INTSEL_
+	mov dword ptr es:[ebp-8], _I2F168A_HDPMI_IOTP_BACK
+	sub dword ptr [esp+12], 8 ;ring 3 esp -= 8
 
-	;need set es too, or something will be wrong.
+	;need set ES too, or something will be wrong.
 	;the handler can set its own SS:ESP or use trapped client's stack
 	push ds
 	pop es
@@ -511,9 +508,9 @@ _I2f168A_Hdpmi_InOutExcHandler_back::
 	dec esi
 	jnz portloop
 
-	pushf ;change IOPL flag to 0
-	and word ptr [esp], 0CFFFh
-	popf
+	;pushf ;change IOPL flag to 0 ;original trapped flag is IOPL0
+	;and word ptr [esp], 0CFFFh
+	;popf
 
 	;copy ring3 stack back to ring0 stack
 	push es ;ds:esi
