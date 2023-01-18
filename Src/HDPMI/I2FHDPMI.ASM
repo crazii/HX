@@ -28,11 +28,11 @@ dsel dw -1
 IOPORTTRAP ends
 
 ;--- in a first step, it might be sufficient to have static storage for 4 port ranges.
-IOTP_COUNT equ 4
+?IOTP_COUNT equ 16
 
 _DATA16 segment
 traptable label byte
- IOPORTTRAP IOTP_COUNT dup(<>)
+ IOPORTTRAP ?IOTP_COUNT dup(<>)
 _DATA16 ends
 endif
 
@@ -181,20 +181,21 @@ is0006:
 @@:
 	cmp dword ptr ss:[ebx], 0FFFFFFFFh
 	je test2
-	jmp fail_0006
+	jmp next
 test2:
 	cmp dword ptr ss:[ebx + 4], 0FFFFFFFFh
 	je test3
-	jmp fail_0006
+	jmp next
 test3:
 	cmp dword ptr ss:[ebx + 8], 0FFFFFFFFh
 	je @F
+next:
 	add ebx, sizeof IOPORTTRAP
-	cmp ebx, offset traptable + sizeof IOPORTTRAP * IOTP_COUNT
-	jbe fail_0006
+	cmp ebx, offset traptable + ?IOTP_COUNT * sizeof IOPORTTRAP
+	jae fail_0006
 	loop @B
 fail_0006:
-	xor eax, eax
+	mov [esp].PUSHADS.rEAX, 0
 	stc
 	jmp done_0006
 @@: ;found empty slot
@@ -208,7 +209,7 @@ fail_0006:
 	mov ss:[ebx].IOPORTTRAP.off, eax
 	mov eax, [esp].PUSHADS.rEBX
 	mov ss:[ebx].IOPORTTRAP.dsel, ax
-	mov eax, ebx ;use table entry addr as handle
+	mov [esp].PUSHADS.rEAX, ebx ;use table entry addr as handle
 	clc
 
 done_0006:
@@ -220,7 +221,7 @@ is0007:
 
 	cmp edx, offset traptable ;check if handle is in the oitable
 	jb fail_0007
-	cmp edx, offset traptable + sizeof IOPORTTRAP * IOTP_COUNT
+	cmp edx, offset traptable + ?IOTP_COUNT * sizeof IOPORTTRAP
 	jae fail_0007
 	jmp @F
 fail_0007:
@@ -405,7 +406,7 @@ tableloop:
 	jmp @F
 tablenext:
 	add ebx, sizeof IOPORTTRAP
-	cmp ebx, offset traptable + sizeof IOPORTTRAP * IOTP_COUNT
+	cmp ebx, offset traptable + ?IOTP_COUNT * sizeof IOPORTTRAP
 	jae _I2f168A_Hdpmi_InOutExcHandler_notfound ;not found in table
 	jmp tableloop
  _I2f168A_Hdpmi_InOutExcHandler_notfound:
