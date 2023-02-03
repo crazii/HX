@@ -88,13 +88,17 @@ tab168a label word
 ;--- ax= 7: release IO port trap
 ;---        edx = handle
 ;---        out: NC if ok
-;--- ax= 8: simulate IO (read/write trapped ports)
+;--- ax= 8: simulate/untrapped IO (read/write trapped ports)
+;---		cl=out val
+;---		al=in val (on return)
+;---		dx=port
+;---		ch=1(out),0(in)
 ;--- ax= 9: virtualize IRQ
 ;--- ax=10: devirtualize IRQ
 
 	@wofs is0006	; trap port range(s)
 	@wofs is0007	; release trapped port range(s)
-;	@wofs is0008	; read/write trapped ports
+	@wofs is0008	; read/write trapped ports
 ;	@wofs is0009	; virtualize IRQ
 
  endif
@@ -260,6 +264,20 @@ done_0007:
 	ret
 
 is0008:
+	test ch, ch
+	jz in_0008
+	;@printf <"untrapped out %X %b",lf>, dx, cx
+	xchg al, cl
+	out dx, al
+	xchg al, cl
+	jmp done_0008
+in_0008:
+	;@printf <"untrapped in %X",lf>, dx
+	in al, dx
+done_0008:
+	stc
+	ret
+
 is0009:
 	stc
 	ret
