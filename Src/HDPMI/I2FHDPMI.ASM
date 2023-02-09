@@ -272,8 +272,8 @@ is0008:
 	xchg al, cl
 	jmp done_0008
 in_0008:
-	;@printf <"untrapped in %X",lf>, dx
 	in al, dx
+	;@printf <"untrapped in %X %b",lf>, dx, ax
 done_0008:
 	stc
 	ret
@@ -432,7 +432,7 @@ tablenext:
 	jmp _I2f168A_Hdpmi_InOutExcHandler_done
 @@:
 
-	;copy stack to client. 
+	; copy stack to client. 
 	; note: after trap handler returns from ring3 to _I2f168A_Hdpmi_InOutExcHandler_back,
 	; the original ring0 stack was lost (new entering). so save the stack frame to ring3 stack.
 	mov edi, [esp + sizeof PUSHADS].IOPORTTRAPFRAME.rSSd ;es:edi
@@ -481,8 +481,8 @@ portloop: ;iterate ports and do 1 byte at a time.
 	push es ;ring 3 ss
 	push ebp ;ring 3 esp
 	push es:[ebp + 8 + sizeof PUSHADS].IOPORTTRAPFRAME.rEFL ;eflags (skip pushad + edx + ecx on stack)
-	or dword ptr [esp], 03000h ;change IOPL to 3. Allow handler to do the actually port IO if needed, otherwise it's a recursion
-	and dword ptr [esp], not 0200h ;disable interrupt
+	;or dword ptr [esp], 03000h ;change IOPL to 3. Allow handler to do the actually port IO if needed, otherwise it's a recursion -- UPDATE: now use untrapped IO functions, don't use IOPL3
+	and dword ptr [esp], not 0300h ;disable interrupt & trap
 	push dword ptr ss:[ebx].IOPORTTRAP.sel
 	push ss:[ebx].IOPORTTRAP.off
 
