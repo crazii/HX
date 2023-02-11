@@ -27,12 +27,32 @@ sel dw -1
 dsel dw -1
 IOPORTTRAP ends
 
+IOPORTTRAPFRAME struct
+rEBX	dd ? ; EBX. local. match the entry of _I2f168A_Hdpmi_InOutExcHandler
+rES		dd ? ; ES. local. match the entry of _I2f168A_Hdpmi_InOutExcHandler
+rDS		dd ? ; DS. local.
+		dd ? ; return addr of _I2f168A_Hdpmi_InOutExcHandler's caller
+rError	dd ? ; error code of 0D(#GP) except 
+rEIP	dd ? ; faulted eip
+rCSd	dd ? ; faulted cs
+rEFL	dd ? ; eflags
+rESP	dd ? ; ring 3 esp
+rSSd	dd ? ; ring 3 ss
+IOPORTTRAPFRAME ends
+
 ;--- in a first step, it might be sufficient to have static storage for 4 port ranges.
 ?IOTP_COUNT equ 16
+?USE_HOST_MEM equ 1 ;use host memory to store trapped stack frame. does not support trap recursion
 
 _DATA16 segment
 traptable label byte
  IOPORTTRAP ?IOTP_COUNT dup(<>)
+
+if ?USE_HOST_MEM
+trapstack label byte
+PUSHADS <>
+IOPORTTRAPFRAME <>
+endif
 _DATA16 ends
 endif
 
@@ -288,19 +308,6 @@ _I2f168A_Hdpmi endp
 
 if ?PMIOPL eq 0
 
-IOPORTTRAPFRAME struct
-rEBX	dd ? ; EBX. local. match the entry of _I2f168A_Hdpmi_InOutExcHandler
-rES		dd ? ; ES. local. match the entry of _I2f168A_Hdpmi_InOutExcHandler
-rDS		dd ? ; DS. local.
-		dd ? ; return addr of _I2f168A_Hdpmi_InOutExcHandler's caller
-rError	dd ? ; error code of 0D(#GP) except 
-rEIP	dd ? ; faulted eip
-rCSd	dd ? ; faulted cs
-rEFL	dd ? ; eflags
-rESP	dd ? ; ring 3 esp
-rSSd	dd ? ; ring 3 ss
-IOPORTTRAPFRAME ends
-
 ; get operande size from selector type (32/64) in ES, and prefix flag in CH (1 if has prefix, 0 if not)
 ; input:
 ;	BL: instruction
@@ -435,10 +442,15 @@ tablenext:
 	; copy stack to client. 
 	; note: after trap handler returns from ring3 to _I2f168A_Hdpmi_InOutExcHandler_back,
 	; the original ring0 stack was lost (new entering). so save the stack frame to ring3 stack.
+if ?USE_HOST_MEM
+	mov edi, ss
+	mov es, di
+	mov edi, offset trapstack + sizeof PUSHADS + sizeof IOPORTTRAPFRAME
+else
 	mov edi, [esp + sizeof PUSHADS].IOPORTTRAPFRAME.rSSd ;es:edi
 	mov es, di
 	mov edi, [esp + sizeof PUSHADS].IOPORTTRAPFRAME.rESP
-
+endif
 	mov esi, esp ; ds:esi
 	push eax ;do not copy these
 	push ecx
@@ -446,19 +458,22 @@ tablenext:
 	push ss
 	pop ds
 
-	mov ecx, (sizeof PUSHADS + sizeof IOPORTTRAPFRAME+8) / 4
-	sub edi, (sizeof PUSHADS + sizeof IOPORTTRAPFRAME+8)
-@@:
-	lodsd
-	stosd
-	loop @B
+	mov ecx, (sizeof PUSHADS + sizeof IOPORTTRAPFRAME) / 4
+	sub edi, (sizeof PUSHADS + sizeof IOPORTTRAPFRAME)
+	rep movsd
+
 	pop ds
 	pop ecx
 	pop eax
 
 	mov ebp, [esp + sizeof PUSHADS].IOPORTTRAPFRAME.rESP
-	sub ebp, sizeof PUSHADS + sizeof IOPORTTRAPFRAME + 8
-	mov [esp + sizeof PUSHADS].IOPORTTRAPFRAME.rESP, ebp ;now es:ebp == ring3 stack top
+if ?USE_HOST_MEM
+	mov edi, [esp + sizeof PUSHADS].IOPORTTRAPFRAME.rSSd
+	mov es, di
+else
+	sub ebp, sizeof PUSHADS + sizeof IOPORTTRAPFRAME ;now es:ebp == ring3 stack top
+	;mov [esp + sizeof PUSHADS].IOPORTTRAPFRAME.rESP, ebp
+endif
 
 	add esp, sizeof PUSHADS + sizeof IOPORTTRAPFRAME ;stack vals not used after copy.
 
@@ -480,7 +495,11 @@ portloop: ;iterate ports and do 1 byte at a time.
 	;OUTPUT: return eax for IN, or original eax for OUT (compatible parameters for EMM386)
 	push es ;ring 3 ss
 	push ebp ;ring 3 esp
+if ?USE_HOST_MEM
+	push ss:[trapstack + sizeof PUSHADS].IOPORTTRAPFRAME.rEFL
+else
 	push es:[ebp + 8 + sizeof PUSHADS].IOPORTTRAPFRAME.rEFL ;eflags (skip pushad + edx + ecx on stack)
+endif
 	;or dword ptr [esp], 03000h ;change IOPL to 3. Allow handler to do the actually port IO if needed, otherwise it's a recursion -- UPDATE: now use untrapped IO functions, don't use IOPL3
 	and dword ptr [esp], not 0300h ;disable interrupt & trap
 	push dword ptr ss:[ebx].IOPORTTRAP.sel
@@ -513,8 +532,13 @@ _I2f168A_Hdpmi_InOutExcHandler_back::
 	mov edx, 0FFh
 	shl edx, cl
 	not edx
+if ?USE_HOST_MEM
+	and ss:[trapstack].PUSHADS.rEAX, edx
+	or ss:[trapstack].PUSHADS.rEAX, eax
+else
 	and es:[ebp+8].PUSHADS.rEAX, edx
 	or es:[ebp+8].PUSHADS.rEAX, eax ;IN: save returned value to stack
+endif
 	mov ecx, es:[ebp]
 @@:
 	shr eax, 8 ; OUT: for an OUT instruction, eax should not be changed by handler. TODO: save eax
@@ -532,10 +556,15 @@ _I2f168A_Hdpmi_InOutExcHandler_back::
 	;popf
 
 	;copy ring3 stack back to ring0 stack
+if ?USE_HOST_MEM
+	mov esi, ss
+	mov ds, si
+	mov esi, offset trapstack
+else
 	push es ;ds:esi
 	pop ds
 	lea esi, [ebp + 8]
-
+endif
 	push ss ;es:edi
 	pop es
 	mov edi, esp
@@ -543,10 +572,7 @@ _I2f168A_Hdpmi_InOutExcHandler_back::
 	mov ecx, (sizeof PUSHADS + sizeof IOPORTTRAPFRAME) / 4
 	sub edi, (sizeof PUSHADS + sizeof IOPORTTRAPFRAME)
 	mov esp, edi
-@@:
-	lodsd
-	stosd
-	loop @B
+	rep movsd
 
 _I2f168A_Hdpmi_InOutExcHandler_done:
 	popad
