@@ -2750,13 +2750,12 @@ if 0
 	pop ebp
 endif
 
- if ?PMIOPL eq 0
-	call _I2f168A_Hdpmi_InOutExcHandler ; this function might directly IRET without execute following code
- endif
-
 	@testexception exc0D, exc0Dx
 	@simintlpms 0D
 exc0D:
+ if ?PMIOPL eq 0
+	call _I2f168A_Hdpmi_InOutExcHandler ; this function might directly IRET without execute following code
+ endif
 	call emuprivinstr		;emulate some privileged opcodes in ring 3
 exc0Dx:
 	@exception 0D, TRUE
