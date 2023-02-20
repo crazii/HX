@@ -1607,7 +1607,7 @@ setINIRQ:
 	shl esi, cl
 	pop ecx
 
-	if 1
+	if 0
 	;@printf <"irq mask: %X %X",lf>, ss:[wIRQMask], si
 	;@printf <"nested: %X",lf>, ss:[wNestedLevel]
 	;cmp ss:[wNestedLevel], 3
@@ -1626,50 +1626,15 @@ setINIRQ:
 	test ss:[wIRQMask], si
 	jz no_reent
 	cmp cs:[irqacktable+eax* sizeof R3PROC].R3PROC._Cs, 0
-	je @F
-	@printf <"irq: %lX",lf>, eax
+	je no_reent
+	;@printf <"irq: %lX",lf>, eax
 	lea edi, [irqacktable+eax* sizeof R3PROC]
-	;mov edx, ss:[irqacktable+eax* sizeof R3PROC].R3PROC._Eip
-	;mov cs:[edi].R3PROC._Eip, edx
-	;mov edx, ss:[irqacktable+eax* sizeof R3PROC].R3PROC._Cs
-	;mov cs:[edi].R3PROC._Cs, edx
-	jmp no_reent
-@@:
-	mov al, 0bh
-	out 20h, al
-	in al, 20h
-	push eax
-	and dword ptr [esp], not 04h
-	test al, 04h ;slave?
-	jz @F
-	mov al, 0bh
-	out 0A0h, al
-	in al, 0A0h
-	test al, 0FFh
-	jz @F
-	mov al, 20h
-	out 0A0h, al
-@@:
-	pop eax
-	test al, 0FFh
-	jz @F
-	mov al, 20h
-	out 20h, al
-@@:
-	pop esi
-	pop edi
-	pop edx
-	pop eax
-	pop ds
-	add esp,sizeof RETF32+8
-	iretd
-
 no_reent:
 	or ss:[wIRQMask], si
 	not esi
 testIRQ_end:
 	;@printf <"lpms call int %b, fl:%X",lf>, ax, word ptr [esp].IRQFRAME.iret32.rFL
-if 1;?DEBUGLOG
+if ?DEBUGLOG
 	cmp esi, 0FFFFFFFFh
 	jne @F
 	;@printf <"lpms_call_int: %lX, %lX", lf>, edi, offset r3vect08
@@ -1968,7 +1933,7 @@ if ?NO_IRQ_REENT
 	cmp ebx, 0FFFFFFFFh
 	je @F
 
-	if 1;?DEBUGLOG
+	if ?DEBUGLOG
 	not bx
 	bsf bx, bx
 	@printf <"ied %X, LPMSused: %b", lf>, bx, word ptr ss:[bLPMSused] 
@@ -2017,7 +1982,7 @@ if ?NO_IRQ_REENT
 	mov ebx, dword ptr [ebx-4]
 	and ss:[wIRQMask], bx
 	dec ss:[wNestedLevel]
-if 1;?DEBUGLOG
+if ?DEBUGLOG
 	cmp ebx, 0FFFFFFFFh
 	je @F
 	not bx
