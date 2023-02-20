@@ -265,6 +265,7 @@ endif
 if ?PMIOPL eq 0
 externdef _I2f168A_Hdpmi_InOutExcHandler_back:abs
 externdef _I2F168A_HDPMI_IOTP_BACK:abs
+externdef irqacktable:abs
 endif
 externdef _I2F1684_0001_:abs
 externdef _I2F1684_0009_:abs

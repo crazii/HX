@@ -56,6 +56,11 @@ endif
 _DATA16 ends
 endif
 
+_DATA32C segment
+irqacktable label byte
+R3PROC 16 dup({0,0})
+_DATA32C ends
+
 _TEXT32 segment
 
 ;*** callback for HDPMI extensions
@@ -115,11 +120,15 @@ tab168a label word
 ;---		ch=1(out),0(in)
 ;--- ax= 9: virtualize IRQ
 ;--- ax=10: devirtualize IRQ
+;--- ax=11: install irq ack handler
+;---		esi = irq number
+;---		ecx:edx = handler address
 
 	@wofs is0006	; trap port range(s)
 	@wofs is0007	; release trapped port range(s)
 	@wofs is0008	; read/write trapped ports
-;	@wofs is0009	; virtualize IRQ
+	@wofs is0009	; virtualize IRQ
+	@wofs is000a	; irq ack
 
  endif
 MAX168A equ ($ - offset tab168a) / sizeof word
@@ -299,6 +308,20 @@ done_0008:
 	ret
 
 is0009:
+	stc
+	ret
+is000a:
+	cmp esi, 15
+	ja fail_000a
+	push es
+	push byte ptr _CSALIAS_
+	pop es
+	mov es:[irqacktable+esi*sizeof R3PROC].R3PROC._Cs, ecx
+	mov es:[irqacktable+esi*sizeof R3PROC].R3PROC._Eip, edx
+	pop es
+	clc
+	ret
+fail_000a:
 	stc
 	ret
  endif

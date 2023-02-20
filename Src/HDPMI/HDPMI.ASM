@@ -28,6 +28,7 @@ else
 endif
 
 ?EMUHLTINR0	equ 0	;std 0: 1=emulate HLT in ring 0 instead of v86/real-mode
+?DEBUGLOG equ 0
 
 ;--- GROUP16
 @definegroup16 macro
@@ -302,6 +303,23 @@ defint&xx&:
 ifnb <zz>
 	call zz
 endif
+
+if ?DEBUGLOG
+	push eax
+	mov eax, xx&h
+	@printf <"callrmproc_iretframe %b", lf>, ax
+	pop eax
+
+	push ss
+	pushad
+	@printf <"EAX=%lX EBX=%lX ECX=%lX EDX=%lX ESI=%lX",lf>,\
+		[esp].PUSHADS.rEAX,[esp].PUSHADS.rEBX,[esp].PUSHADS.rECX,[esp].PUSHADS.rEDX,[esp].PUSHADS.rESI
+	@printf <"EDI=%lX EBP=%lX ESP=%lX SS=%X",lf>,\
+		[esp].PUSHADS.rEDI,[esp].PUSHADS.rEBP,[esp].PUSHADS.RESERVE, word ptr [esp+sizeof PUSHADS]
+	popad
+	add esp, 4
+endif
+
 	push yy
 	jmp callrmproc_iretframe
 	align 4
@@ -881,6 +899,9 @@ endif
 ;--- here start PMBREAKs with no frame
 _JMPF_ equ ($ - offset spectab) / 2 + 200h
 	@defx rpmstacki,_RTINT_		;switch from LPMS to PMS after IRQ
+if ?PMIOPL eq 0	
+	@defx rpmstacki_nested, _RTINT_NESTED_
+endif
 	@defx rpmstackr,_FRTIN_		;return from internal RMCBs, flags unchanged
 	@defx rpmstackr2,_FRTIN2_	;return from internal RMCBs, std flags changed
 	@defx _retcb,  _RETCB_		;return from client RMCBs
@@ -1164,6 +1185,14 @@ endif
 
 _DATA16 ends
 
+if ?PMIOPL eq 0
+?TRAP_CLI equ 1 ;trap POPF/STI after CLI
+?NO_IRQ_REENT equ 1 ;prevent reentrance of irqs
+else
+?TRAP_CLI equ 0
+?NO_IRQ_REENT equ 0
+endif
+
 ;--- _DATA16C: client instance data both modes
 
 _DATA16C segment
@@ -1217,6 +1246,18 @@ wEnvFlags	label word
 bEnvFlags	db 0		;flags of environment string "HDPMI="
 bEnvFlags2	db 0		;flags 256-32768 of "HDPMI="
 
+if ?PMIOPL eq 0
+
+if ?NO_IRQ_REENT
+wIRQMask		dw 0
+wNestedLevel	dw 0
+endif
+
+if ?TRAP_CLI
+wTrapCLI	dw 0
+endif
+
+endif
 
 _DATA16C ends
 
@@ -1523,8 +1564,10 @@ lpms_call_int proc public
 	push eax
 	push edx
 	push edi
+	push esi
 
 IRQFRAME struct
+rEsi	dd ?
 rEdi	dd ?
 rEdx	dd ?
 rEax	dd ?
@@ -1536,6 +1579,109 @@ iret32  IRET32 <>
 IRQFRAME ends
 
 	mov edi,[esp].IRQFRAME.pR3Proc
+
+if ?NO_IRQ_REENT
+	mov esi, 0FFFFFFFFh
+	cmp edi, offset r3vect08
+	jb testIRQ_end
+	cmp edi, offset r3vect0F
+	ja @F
+	mov esi, edi
+	sub esi, offset r3vect08
+	shr esi, 3
+	jmp setINIRQ
+@@:
+	cmp edi, offset r3vect70
+	jb testIRQ_end
+	cmp edi, offset r3vect77
+	ja testIRQ_end
+	mov esi, edi
+	sub esi, offset r3vect70
+	shr esi, 3
+	add esi, 8
+setINIRQ:
+	mov eax, esi
+	push ecx
+	mov ecx, esi
+	mov esi, 1
+	shl esi, cl
+	pop ecx
+
+	if 1
+	;@printf <"irq mask: %X %X",lf>, ss:[wIRQMask], si
+	;@printf <"nested: %X",lf>, ss:[wNestedLevel]
+	;cmp ss:[wNestedLevel], 3
+	;jae @F
+	;jmp no_reent
+;@@:
+	;cmp si, 10h ;IRQ4 - test only
+	;je @F
+	cmp si, 400h ; IRQ10
+	je @F
+	cmp si, 800h ; IRQ11
+	je @F
+	jmp no_reent
+@@:
+	endif
+	test ss:[wIRQMask], si
+	jz no_reent
+	cmp cs:[irqacktable+eax* sizeof R3PROC].R3PROC._Cs, 0
+	je @F
+	@printf <"irq: %lX",lf>, eax
+	lea edi, [irqacktable+eax* sizeof R3PROC]
+	;mov edx, ss:[irqacktable+eax* sizeof R3PROC].R3PROC._Eip
+	;mov cs:[edi].R3PROC._Eip, edx
+	;mov edx, ss:[irqacktable+eax* sizeof R3PROC].R3PROC._Cs
+	;mov cs:[edi].R3PROC._Cs, edx
+	jmp no_reent
+@@:
+	mov al, 0bh
+	out 20h, al
+	in al, 20h
+	push eax
+	and dword ptr [esp], not 04h
+	test al, 04h ;slave?
+	jz @F
+	mov al, 0bh
+	out 0A0h, al
+	in al, 0A0h
+	test al, 0FFh
+	jz @F
+	mov al, 20h
+	out 0A0h, al
+@@:
+	pop eax
+	test al, 0FFh
+	jz @F
+	mov al, 20h
+	out 20h, al
+@@:
+	pop esi
+	pop edi
+	pop edx
+	pop eax
+	pop ds
+	add esp,sizeof RETF32+8
+	iretd
+
+no_reent:
+	or ss:[wIRQMask], si
+	not esi
+testIRQ_end:
+	;@printf <"lpms call int %b, fl:%X",lf>, ax, word ptr [esp].IRQFRAME.iret32.rFL
+if 1;?DEBUGLOG
+	cmp esi, 0FFFFFFFFh
+	jne @F
+	;@printf <"lpms_call_int: %lX, %lX", lf>, edi, offset r3vect08
+@@:
+	cmp esi, 0FFFFFFFFh
+	je @F
+	movzx edx, ss:bLPMSused
+	@printf <"i%b LPMSused:%b",lf>, ax, dx
+@@:
+endif
+endif
+
 if ?32BIT
 	mov eax, cs:[edi].R3PROC._Eip
 	mov edx, cs:[edi].R3PROC._Cs
@@ -1551,14 +1697,22 @@ endif
 
 	lds edi, [esp].IRQFRAME.iret32.rSSSP
 	sub edi,sizeof IRETSPM
+if ?PMIOPL eq 0
+	sub edi, 4*4
+endif
 	mov [esp].IRQFRAME.retfs.rSP, edi
 	mov [esp].IRQFRAME.retfs.rSS, ds
 ife ?32BIT
 	@checkssattr ds,di
 endif
 
+if ?PMIOPL eq 0
+	mov eax, _RTINT_NESTED_
+	mov edx, _INTSEL_
+else
 	mov eax, [esp].IRQFRAME.iret32.rIP
 	mov edx, [esp].IRQFRAME.iret32.rCSd
+endif
 if ?32BIT
 	mov [edi].IRETSPM.rIP, eax
 	mov [edi].IRETSPM.rCSd, edx
@@ -1569,6 +1723,19 @@ else
 	mov [edi].IRETSPM.rCS, dx
 	mov eax, [esp].IRQFRAME.iret32.rFL
 	mov [edi].IRETSPM.rFL, ax
+endif
+if ?PMIOPL eq 0
+	mov edx, [esp].IRQFRAME.iret32.rIP
+	mov [edi+sizeof IRETSPM + 0], edx
+	mov edx, [esp].IRQFRAME.iret32.rCSd
+	mov [edi+sizeof IRETSPM + 4], edx
+	;@printf <"lpmsn: %lX:%lX %lX",lf>, edx, eax, esi
+	;@printf <"lpmsn: %lX:%lX ",lf>, ds, edi
+	mov [edi+sizeof IRETSPM + 8], eax
+if ?NO_IRQ_REENT
+	mov [edi+sizeof IRETSPM + 12], esi
+	inc ss:[wNestedLevel]
+endif
 endif
 	and ah,not 3		;reset TF + IF
 	mov [esp].IRQFRAME.rEfl,eax
@@ -1608,7 +1775,7 @@ ifdef _DEBUG
 	@dprintf "lpms_call_int, sw: invalid PMS=%X:%lX", dx, eax
 @@:
 endif
-	mov edi,?LPMSSIZE- (2*4 + sizeof IRETSPM)	;initial value LPMS
+	mov edi,?LPMSSIZE- (4*4 + sizeof IRETSPM)	;initial value LPMS
 	mov eax,_LPMSSEL_
 	mov ds,eax
 	mov [esp].IRQFRAME.retfs.rSP, edi
@@ -1629,6 +1796,11 @@ endif
 	mov edx, [esp].IRQFRAME.iret32.rCSd
 	mov [edi+sizeof IRETSPM+0], eax
 	mov [edi+sizeof IRETSPM+4], edx
+	mov eax, [esp].IRQFRAME.iret32.rFL
+	mov [edi+sizeof IRETSPM+8], eax
+if ?NO_IRQ_REENT
+	mov [edi+sizeof IRETSPM+12], esi
+endif
 
 if 0;_LTRACE_	;this might be called quite frequently, spoiling any useful log file
 	push ebp
@@ -1642,6 +1814,7 @@ if 0;_LTRACE_	;this might be called quite frequently, spoiling any useful log fi
 endif   
 
 done:
+	pop esi
 	pop edi
 	pop edx
 	pop eax
@@ -1762,29 +1935,110 @@ ife ?CSIPFROMTOP
 	lds ebx,[esp].RPMIFR.rSSSP		;get the LPMS
 	push dword ptr ss:spPMS+4		;SS
 	push dword ptr ss:spPMS+0		;ESP
-	push [esp+8].RPMIFR.rFL			;EFL
+	push dword ptr [ebx+8];push [esp+8].RPMIFR.rFL			;EFL
 	push dword ptr [ebx+4]			;CS
 	push dword ptr [ebx+0]			;EIP
+if ?NO_IRQ_REENT
+	mov ebx, dword ptr [ebx+12]
+	and ss:[wIRQMask], bx
+if ?DEBUGLOG
+	cmp ebx, 0FFFFFFFFh
+	je @F
+	not bx
+	bsf bx, bx
+	@printf <"iedx %X", lf>, bx
+@@:
+endif
+endif
 	lds ebx,[esp+sizeof IRET32]		;restore DS,EBX
 else
 	push _LPMSSEL_
 	pop ds
 	push dword ptr ss:spPMS+4		;SS
 	push dword ptr ss:spPMS+0		;ESP
-	push [esp+8].RPMIFR.rFL			;EFL
+	push dword ptr ds:[?LPMSSIZE-8] ;push [esp+8].RPMIFR.rFL			;EFL
 	assume ds:GROUP16
-	push dword ptr ds:[?LPMSSIZE-4]	;CS
-	push dword ptr ds:[?LPMSSIZE-8]	;EIP
+	push dword ptr ds:[?LPMSSIZE-12]	;CS
+	push dword ptr ds:[?LPMSSIZE-16]	;EIP
+if ?NO_IRQ_REENT
+	push ebx
+	mov ebx, dword ptr ds:[?LPMSSIZE-4]
+	and ss:[wIRQMask], bx
+
+	cmp ebx, 0FFFFFFFFh
+	je @F
+
+	if 1;?DEBUGLOG
+	not bx
+	bsf bx, bx
+	@printf <"ied %X, LPMSused: %b", lf>, bx, word ptr ss:[bLPMSused] 
+	endif
+@@:
+	pop ebx
+endif
+
+	;@printf <"lpms call int end. fl:%X", lf>, word ptr [esp].IRET32.rFL
 	mov ds,[esp+sizeof IRET32]
 endif
 if ?PMIOPL eq 0
 ;--- ensure that interrupts are enabled -
 ;--- an IRET in ring3 does NOT restore IF if IOPL is 0.
-	or byte ptr [esp].IRET32.rFL+1, 2
+	;or byte ptr [esp].IRET32.rFL+1, 2
+endif
+if ?NO_IRQ_REENT
+	mov ss:[wIRQMask], 0
+	mov ss:[wNestedLevel],0
 endif
 	iretd
 	align 4
 rpmstacki endp
+
+RPMIFR2 struct
+rEbx	dd ?
+rDs		dd ?
+	IRET32 <>
+RPMIFR2 ends
+
+if ?PMIOPL eq 0
+rpmstacki_nested proc
+	push ds
+	push ebx
+	lds ebx,[esp].RPMIFR2.rSSSP
+	;@printf <"RTINTN: cs:ip=%lX:%lX, ss:sp=%lX:%lX", lf>, dword ptr [ebx+4], dword ptr [ebx], dword ptr ds, ebx
+	;@printf <"RTINTN: %lX:%lX", lf>, dword ptr ds, ebx
+	;@printf <"RTINTN: %lX:%lX %lX", lf>, dword ptr [ebx+4], dword ptr [ebx+8], dword ptr [ebx+12]
+	push ds							;SS
+	add ebx, 16
+	push ebx						;ESP
+	push dword ptr [ebx-8]			;EFL
+	push dword ptr [ebx-12]			;CS
+	push dword ptr [ebx-16]			;EIP
+if ?NO_IRQ_REENT
+	mov ebx, dword ptr [ebx-4]
+	and ss:[wIRQMask], bx
+	dec ss:[wNestedLevel]
+if 1;?DEBUGLOG
+	cmp ebx, 0FFFFFFFFh
+	je @F
+	not bx
+	bsf bx, bx
+	@printf <"iedn, %X", lf>, bx
+@@:
+endif
+endif
+	;test byte ptr [esp].IRET32.rFL+1, 2
+	;jz @F
+	;and byte ptr [esp].IRET32.rFL+1, not 1 ;reset TF
+	;cmp ss:[wTrapCLI], 0FFFFh
+	;jz @F
+	;dec ss:[wTrapCLI]
+@@:
+	;@printf <"lpms call int endn. fl:%X", lf>, word ptr [esp].IRET32.rFL
+	lds ebx,[esp+sizeof IRET32]		;restore DS,EBX
+	iretd
+	align 4
+rpmstacki_nested endp
+endif
 
 ;*** lpms_call_exc()
 ;*** exception occured.
@@ -1805,6 +2059,11 @@ f		R3FAULT32 <>	;or R0FAULT32 for an exception in ring 0
 LCEFR ends
 
 lpms_call_exc proc
+	;mov eax, [esp]
+	;mov ebx, [esp+4].R3FAULT32.rSSd
+	;mov ecx, [esp+4].R3FAULT32.rSP
+	;@printf <"excpetion :%lX, SS:ESP=%lX:%lX",lf>, eax,ebx,ecx
+	;jmp $
 	sub esp,sizeof RETF32
 	push ebp
 	mov ebp,esp
@@ -2607,12 +2866,37 @@ else
 endif
 intr00 endp
 
+TRAPCLIFRAME struct
+IRET32 <>
+TRAPCLIFRAME ends
+
 ;--- exc 01: test if it is a hw break
 ;--- register dr6: bits 0-3: hw break
 ;--- bit 14: trace int ( must be reset by software! )
 ;--- bit 15: 
 
 intr01 proc
+
+if ?TRAP_CLI
+	;test [esp].TRAPCLIFRAME.rFL, 100h ;TF?
+	;jz normalintr
+	;test ss:[wTrapCLI], 0FFFFh
+	;jz normalintr
+	test [esp].TRAPCLIFRAME.rFL, 200h ;IF
+	jz @F
+	;@printf <"trapcli with IF on", lf>
+	jmp doneiret
+@@:
+	or [esp].TRAPCLIFRAME.rFL, 200h
+doneiret:
+	;dec ss:[wTrapCLI]
+	and [esp].TRAPCLIFRAME.rFL, not 100h
+	iretd
+normalintr:
+	@printf <"normal intr01", lf>
+	jmp $
+endif
+
 if ?TESTEXC01
 	push eax
 	mov eax, dr6
@@ -2839,7 +3123,8 @@ endif
 ;--- exceptions 12-1F not supported
 
 defexcxx:		;default exceptions 12-1F
-;	@printf <"unsupported exception",lf>
+	@printf <"unsupported exception",lf>
+	jmp $
 	push cs
 	pop ss
 ;	int 3
@@ -3235,6 +3520,9 @@ endif
 	mov bx,ss:[wTmpRegBX]
 	mov ax,ss:[wTmpRegAX]
 
+if ?DEBUGLOG
+	@printf <"lpms_call_int intrrmcb",lf>
+endif
 	jmp lpms_call_int		;LPMS switch + jump to ring 3
 	align 4
 
@@ -3329,6 +3617,7 @@ callrmproc_iretframe proc
 callrmproc_1::
 	mov ebx, [esp+4].IRET32.rFL
 	and bh, not _TF		;reset TF
+	;and bh, not _IF
 if ?SETRMIOPL	;is 0 by default
 	and bh, 0CFh
 	or bh, ?RMIOPL shl 4
@@ -3345,6 +3634,18 @@ callrmproc_rm:
 	align 4
 _TEXT16 ends
 callrmproc_pm:
+
+if ?DEBUGLOG
+	push ss
+	pushad
+	@printf <"callrmproc_iretframe end", lf>
+	@printf <"EAX=%lX EBX=%lX ECX=%lX EDX=%lX ESI=%lX",lf>,\
+		[esp].PUSHADS.rEAX,[esp].PUSHADS.rEBX,[esp].PUSHADS.rECX,[esp].PUSHADS.rEDX,[esp].PUSHADS.rESI
+	@printf <"EDI=%lX EBP=%lX ESP=%lX SS=%X",lf>,\
+		[esp].PUSHADS.rEDI,[esp].PUSHADS.rEBP,[esp].PUSHADS.RESERVE, word ptr [esp+sizeof PUSHADS]
+	popad
+	add esp, 4
+endif
 	iretd
 	align 4
 callrmproc_iretframe endp
@@ -3360,12 +3661,15 @@ callrmproc_iretframe endp
 _callrmsint proc public
 
 	xchg ebx,[esp]
+	push eax
+	pop eax
 ;	@dprintf "callrmsint %X", bx
 	@getrmintvec
 	mov ss:calladdr2, ebx
 	mov ebx,[esp+4].IRET32.rFL
 ;	pushfd
 	and bh,not _TF		;reset TF
+	;and bh, not _IF
 	mov ss:[tmpFLReg],bx
 ;	popfd
 	pop ebx				;stack: ip,cs,fl,sp,ss
@@ -3388,6 +3692,15 @@ callrmsint_pm:
 if ?PMIOPL
 	or ah, ?PMIOPL shl 4
 endif
+	;push ecx
+	;mov cx, word ptr [esp+4].IRET32.rFL
+	;and cx, 200h
+	;or ax, cx
+	;mov cx, word ptr [esp+4].IRET32.rFL
+	;or cx, not 200h
+	;and ax, cx
+	;pop ecx
+
 	mov word ptr [esp+4].IRET32.rFL,ax
 	pop eax
 	iretd
@@ -3609,12 +3922,96 @@ done:
 if ?PMIOPL eq 0
 emucli:
 	@dprintf "emulate cli"
+	test byte ptr [esp].EMUINSFR.rFL+1, 2
+	jz done_emuclisti
+
+if ?TRAP_CLI
+	mov eax, [esp].EMUINSFR.rFL
+	;@printf <"cli inc trap %b, fl:%X", lf>, word ptr ss:[wTrapCLI], word ptr [esp].EMUINSFR.rFL
+	;or [esp].EMUINSFR.rFL, 100h ;TF
+	cmp byte ptr [esi-2], 9Ch ;PUSHF
+	jne @F
+	lds esi, [esp].EMUINSFR.rSSSP
+	;@printf <"trapcli pushf %X %X",lf>, ax, word ptr [esi]
+	cmp ax, word ptr [esi]
+	jne @F
+	mov eax, [esi]
+	and eax, 200h
+	shr eax, 1
+	or word ptr [esi], ax ; TF
+
+	lds esi,[esp].EMUINSFR.rCSIP
+	inc esi
+	jmp trapcli_end
+@@:
+	lds esi,[esp].EMUINSFR.rCSIP
+	inc esi
+
+	cmp byte ptr [esi-2], 58h ;pop eax
+	jne trapcli_failed
+	cmp byte ptr [esi-3], 9Ch
+	jne @F
+	;-- pushfd, pop eax
+	;@printf <"trapcli pushfd pop eax %X %X",lf>, ax, word ptr [esp].EMUINSFR.dwEAX
+	cmp ax, word ptr [esp].EMUINSFR.dwEAX
+	jne trapcli_failed
+	mov eax, [esp].EMUINSFR.dwEAX
+	and eax, 200h
+	shr eax, 1
+	or [esp].EMUINSFR.dwEAX, eax
+	jmp trapcli_end
+@@:
+	cmp byte ptr [esi-3], 66h ;pop ax
+	jne trapcli_failed
+	cmp byte ptr [esi-4], 9Ch
+	jne trapcli_failed
+	;-- pushf pop ax
+	@printf <"trapcli pushf pop ax %X %X",lf>, ax, word ptr [esp].EMUINSFR.dwEAX
+	cmp ax, word ptr [esp].EMUINSFR.dwEAX
+	jne trapcli_failed
+	mov eax, [esp].EMUINSFR.dwEAX
+	and eax, 200h
+	shr eax, 1
+	or [esp].EMUINSFR.dwEAX, eax
+trapcli_end:
+	;inc ss:[wTrapCLI]
+trapcli_failed:
+endif
 	and byte ptr [esp].EMUINSFR.rFL+1, not 2
 	jmp done_emuclisti
 	align 4
 emusti:
 	@dprintf "emulate sti"
+
+	;test byte ptr [esp].EMUINSFR.rFL+1, 2 
+	;jnz done_emuclisti
+
+	lodsb
+	cmp al, 0FAh	;CLI
+	je done_emuclisti
+
 	or byte ptr [esp].EMUINSFR.rFL+1, 2
+
+	if 1
+	cmp al, 0CFh	;IRET
+	jne @F
+	push edi
+	lds edi, [esp].EMUINSFR.rSSSP
+	mov esi, [edi]
+	mov eax, [edi+4]
+	mov [esp].EMUINSFR.rCSd, eax
+	mov eax, [edi+8]
+	and eax, not 1A3000h ;mask off VIP,VIF,VM,IOPL
+	mov dword ptr [esp].EMUINSFR.rFL, eax
+	add [esp].EMUINSFR.rSP, 12
+	pop edi
+	;test eax, 200h
+	;jz trapcli
+	;@printf <"iret after sti",lf>
+	inc esi
+	endif
+@@:
+	dec esi
 	jmp done_emuclisti
 endif
 

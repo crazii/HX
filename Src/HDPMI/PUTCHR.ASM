@@ -253,6 +253,27 @@ endif
 ;--- may be called by int 41h.
 ;--- no registers modified
 ;--- it's public, becaused optionally used by int 41h trap handler
+?COMDEBUG equ 0
+if ?COMDEBUG
+
+_putchrx proc public
+	pushad
+	mov dx, 03F8h+3
+	mov al, 3
+	out dx, al
+	mov dx, 03F8h+5
+_wait:
+	in al, dx
+	test al, 20h
+	jz _wait
+	mov dx, 03F8h
+	mov eax, [esp].PUSHADS.rEAX
+	out dx, al
+	popad
+	ret
+_putchrx endp
+
+else
 
 _putchrx proc public
 
@@ -453,6 +474,7 @@ exit2:
 	popad
 	ret
 _putchrx endp
+endif ;?COMDEBUG
 
 getwordfromstack:
 	mov ax,[ebp+0]	;get saved value of LOWWORD ebp

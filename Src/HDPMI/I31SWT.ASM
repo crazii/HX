@@ -300,6 +300,7 @@ if _LTRACE_ and ?RMCBLOG
 		cs:[eax].R3PROC._Cs,cs:[eax].R3PROC._Eip,es,di,ds,si,ss:taskseg._Esp0
  endif
 endif
+	;@printf <"lpms_call_int rmcb",lf>
 	push eax
 	jmp lpms_call_int		;switch to LPMS
 	align 4
