@@ -226,6 +226,7 @@ next:
 	add ebx, sizeof IOPORTTRAP
 	cmp ebx, offset traptable + ?IOTP_COUNT * sizeof IOPORTTRAP
 	jae fail_0006
+	;@printf <"next",lf>
 	loop @B
 fail_0006:
 	mov [esp].PUSHADS.rEAX, 0
@@ -261,11 +262,15 @@ fail_0007:
 	stc
 	jmp done_0007
 @@:
+	;@printf <"test iobitmap", lf>
 	mov ebx, offset taskseg
-	movzx edx, ss:[ebx].TSSSEG.wOffs
-	add ebx, edx
-	movzx esi, si
-	movzx ecx, di
+	movzx ecx, ss:[ebx].TSSSEG.wOffs
+	add ebx, ecx
+	movzx esi, ss:[edx].IOPORTTRAP.portS
+	movzx ecx, ss:[edx].IOPORTTRAP.portE
+	lea edi, [ecx+1]
+	sub edi, esi
+	mov ecx, edi
 	lea eax, [ecx+esi]
 	cmp eax, 10000h
 	cmc
@@ -280,6 +285,7 @@ fail_0007:
 	mov esi, eax	; ok, now repeat the loop, this time
 	mov cx, di		; the bits are reset.
 @@:
+	;@printf <"reset ports in iobitmap", lf>
 	btr ss:[ebx], esi
 	inc esi
 	loop @B
@@ -287,6 +293,7 @@ fail_0007:
 	mov dword ptr ss:[edx], 0FFFFFFFFh
 	mov dword ptr ss:[edx+4], 0FFFFFFFFh
 	mov dword ptr ss:[edx+8], 0FFFFFFFFh
+	;@printf <"uninstall done",lf>
 	clc
 done_0007:
 	popad
