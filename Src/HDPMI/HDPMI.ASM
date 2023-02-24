@@ -1607,7 +1607,7 @@ setINIRQ:
 	shl esi, cl
 	pop ecx
 
-	if 0
+	if 1
 	;@printf <"irq mask: %X %X",lf>, ss:[wIRQMask], si
 	;@printf <"nested: %X",lf>, ss:[wNestedLevel]
 	;cmp ss:[wNestedLevel], 3
@@ -1616,11 +1616,19 @@ setINIRQ:
 ;@@:
 	;cmp si, 10h ;IRQ4 - test only
 	;je @F
-	cmp si, 400h ; IRQ10
-	je @F
-	cmp si, 800h ; IRQ11
-	je @F
-	jmp no_reent
+	;cmp si, 400h ; IRQ10
+	;je @F
+	;cmp si, 800h ; IRQ11
+	;je @F
+	;jmp no_reent
+	cmp si, 01h ;IRQ0
+	je no_reent
+	cmp si, 02h ;IRQ1
+	je no_reent
+	cmp si, 100h ;IRQ8
+	je no_reent
+	cmp si, 1000h; IRQ12
+	je no_reent
 @@:
 	endif
 	test ss:[wIRQMask], si
