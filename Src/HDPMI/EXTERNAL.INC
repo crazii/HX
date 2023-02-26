@@ -78,7 +78,7 @@ _heapalloc        proto near
 ;--- output routines
 
 _stroutx proto near
-ife ?DOSOUTPUT
+if ?FORCETEXTMODE
 IsTextMode    proto near
 forcetextmode proto near
 endif
@@ -110,6 +110,8 @@ _I2f168A_Hdpmi proto near
 endif
 if ?PMIOPL eq 0
 _I2f168A_Hdpmi_InOutExcHandler proto near
+_I2f168A_Hdpmi_CaptureContext proto near
+_I2f168A_Hdpmi_CaptureContextV86 proto near
 endif
 _vxd_0001 proto near
 _vxd_0009 proto near
@@ -312,7 +314,6 @@ externdef rawjmp_rm_vcpi:near
 _TEXT32 ends
 
 _TEXT16 segment
-externdef callrmintintern_rm_exit:near16
 externdef meventr:near16			;real-mode mouse event proc
 externdef linadvs:dword
 externdef unhookIVTvecs:near
@@ -324,8 +325,6 @@ externdef kdpatch1:near
 externdef kdpatch2:near
 externdef rawjmp_pm_patch:near
 externdef intrrm2pm:far
-externdef kdinit_rm:near
-externdef kdinit2_rm:near
 ;externdef load_rmsegs:near
 externdef rawjmp_rm_all:near
 _TEXT16 ends

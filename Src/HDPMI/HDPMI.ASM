@@ -29,6 +29,7 @@ endif
 
 ?EMUHLTINR0	equ 0	;std 0: 1=emulate HLT in ring 0 instead of v86/real-mode
 ?DEBUGLOG equ 0
+?AUTOSTI	equ 1	;std 1: 1=set client IF=1 for IOPL=0 variant upon return from IRQ
 
 ;--- GROUP16
 @definegroup16 macro
@@ -157,11 +158,19 @@ _NT	equ 40h	;NT flag in HIBYTE(flags)
 ;--- but do not modify flags!
 
 @getrmintvec macro
+if 0
 	push ds
 	push byte ptr _FLATSEL_
 	pop ds
 	mov ebx, ds:[ebx*4]
 	pop ds
+else
+	pushfd
+	shl ebx, 2
+	sub ebx, ss:[dwSSBase]
+	popfd
+	mov ebx, ss:[ebx]
+endif
 endm
 
 ;--- jump to default exception handler (exc2int) for exceptions 00-05 + 07
@@ -279,9 +288,8 @@ label2:
 	jnz label1
 endm
 
-;--- used for ints 00-0F, 70-77 and 1C
-;--- route int to real-mode
-;--- for int 00 and 07 only if ?MAPINTxx is 1 (default is 0)
+;--- used for ints 00-07: route int to real-mode
+;--- only if ?MAPINTxx is 1 (default is 0)
 ;--- esp -> IRET32
 
 @callrmint macro xx, yy
@@ -298,29 +306,17 @@ endm
 ;--- call a real-mode far proc with IRET frame
 ;--- used to route the std real-mode callback INTs to real-mode
 
-@callrmproc macro xx,yy,zz
+@callrmirq macro xx
 defint&xx&:
-ifnb <zz>
-	call zz
+if xx&h lt 10h
+	push xx&h-8
+elseif xx&h ge 70h
+	push xx&h-68h
+elseif xx&h eq 1Ch
+	push 16
+else
+	.err <invalid usage of macro @callrmirq>
 endif
-
-if ?DEBUGLOG
-	push eax
-	mov eax, xx&h
-	@printf <"callrmproc_iretframe %b", lf>, ax
-	pop eax
-
-	push ss
-	pushad
-	@printf <"EAX=%lX EBX=%lX ECX=%lX EDX=%lX ESI=%lX",lf>,\
-		[esp].PUSHADS.rEAX,[esp].PUSHADS.rEBX,[esp].PUSHADS.rECX,[esp].PUSHADS.rEDX,[esp].PUSHADS.rESI
-	@printf <"EDI=%lX EBP=%lX ESP=%lX SS=%X",lf>,\
-		[esp].PUSHADS.rEDI,[esp].PUSHADS.rEBP,[esp].PUSHADS.RESERVE, word ptr [esp+sizeof PUSHADS]
-	popad
-	add esp, 4
-endif
-
-	push yy
 	jmp callrmproc_iretframe
 	align 4
 endm
@@ -340,8 +336,10 @@ endif
 endm
 
 ;--- switch to LPMS, then call ring 3 protected mode int xx
+;--- this macro is used for IRQs only
 
 @simintlpms macro xx
+	call _I2f168A_Hdpmi_CaptureContext
 	pushd offset r3vect&xx
 	jmp lpms_call_int
 	align 4
@@ -951,7 +949,11 @@ v86iret		V86IRET <<offset rawjmp_rm_all>>
 pdGDT	PDESCR <?GDTLIMIT,0>	;pseudo descriptor GDT
 	align 4
 
+if 0
 pdIDT	PDESCR <7FFh,0>			;pseudo descriptor IDT protected mode
+else
+pdIDT	PDESCR <?PREDEFIDTGATES*8-1,0>			;pseudo descriptor IDT protected mode
+endif
 selLDT	dw _SELLDT_				;Selector LDT alias (fix)
 	align 4
 ;nullidt PDESCR <3FFh,0>		;pseudo descriptor IDT real mode
@@ -1096,6 +1098,7 @@ wrmSPtmp	dw 0		;temp store for rmSP on protected-mode reentry
 wrmSStmp	dw 0		;temp store for rmSS on protected-mode reentry
 
 calladdr3	dw 0		;used by callrmprocintern
+dwTmpRegAXBX label dword
 wTmpRegAX	dw 0		;temporary storage for AX
 wTmpRegBX	dw 0		;temporary storage for BX
 
@@ -1162,7 +1165,7 @@ intrmcbs label INTRMCB
 	INTRMCB <0,23h*8      ,?INT23VAL,23h>
 	INTRMCB <0,24h*8      ,?INT24VAL,24h>
 	INTRMCB <0,LOWWORD offset mevntvec,?MEVNTVAL,0>
-SIZEINTRMCB equ ($ - intrmcbs) / sizeof INTRMCB
+SIZEINTRMCB equ ($ - offset intrmcbs) / sizeof INTRMCB
 
 TESTINTRMCB equ 17	;test IRQs + Int 1Ch
 
@@ -1237,6 +1240,9 @@ wPSPSegm	dw 0		;initial psp segment of client
 endif
 
 wIntRmCb	dw 2 dup (0);flags for up to 32 intrmcbs
+ife ?HIDEIVTHOOKS
+wIrqOrgRm	dw 2 dup (0); flags that IRQ originated in RM
+endif
 
 if ?DPMI10EXX
 wExcHdlr	dw 2 dup (0);32 bits for exception handler type
@@ -1352,6 +1358,10 @@ excvec label R3PROC
 	R3PROC < _EXC1D_,_INTSEL_>
 	R3PROC < _EXC1E_,_INTSEL_>
 	R3PROC < _EXC1F_,_INTSEL_>
+
+if ?PMIOPL eq 0
+	R3PROC < 0, 0 >	; filled by ioinstr()
+endif
 
 _DATA32C ends
 
@@ -1956,6 +1966,12 @@ endif
 if ?PMIOPL eq 0
 ;--- ensure that interrupts are enabled -
 ;--- an IRET in ring3 does NOT restore IF if IOPL is 0.
+;--- since rpmstacki() is called only if a stack must be switched back to PMS,
+;--- this is no guarantee that flags are enabled after an IRQ.
+;--- hack: set IF only if next CS is NOT another INTSEL.
+;--- this is "usually" the case when the IRQ was routed from real-mode.
+	;cmp word ptr [esp].IRET32.rCS, _INTSEL_
+	;jz @F
 	;or byte ptr [esp].IRET32.rFL+1, 2
 endif
 if ?NO_IRQ_REENT
@@ -2032,11 +2048,6 @@ f		R3FAULT32 <>	;or R0FAULT32 for an exception in ring 0
 LCEFR ends
 
 lpms_call_exc proc
-	;mov eax, [esp]
-	;mov ebx, [esp+4].R3FAULT32.rSSd
-	;mov ecx, [esp+4].R3FAULT32.rSP
-	;@printf <"excpetion :%lX, SS:ESP=%lX:%lX",lf>, eax,ebx,ecx
-	;jmp $
 	sub esp,sizeof RETF32
 	push ebp
 	mov ebp,esp
@@ -2730,10 +2741,14 @@ endif
 
 if ?WINDBG
 
-	@ResetTrace
+;--- int 22h in PL0 protected-mode is an API that
+;--- the Win3x/9x VMM supplies for the debugger ( WDeb386 ).
+;--- it is called with a function # in AX (or AH?)
+;--- function 0 is query ( must return AX=F386h if service available )
 
+	@ResetTrace
 intr22:
-	@dprintf "intr22: Win386 debug API called, ax=%X",ax
+	@dprintf "intr22: Win386 debug API called, ax=%X", ax
 	iretd
 	align 4
 endif
@@ -3006,7 +3021,6 @@ if 0
 	pop eax
 	pop ebp
 endif
-
 	@testexception exc0D, exc0Dx
 	@simintlpms 0D
 exc0D:
@@ -3028,7 +3042,7 @@ intr0E proc
 	@simintlpms 0E
 exc0E:
 if ?GUARDPAGE0
-	test ss:bEnvFlags,ENVF_GUARDPAGE0
+	test ss:bEnvFlags, ENVF_HIDEIVTHOOKS
 	jz intr0e_1
 	push eax
 	mov eax,cr2
@@ -3096,8 +3110,7 @@ endif
 ;--- exceptions 12-1F not supported
 
 defexcxx:		;default exceptions 12-1F
-	@printf <"unsupported exception",lf>
-	jmp $
+;	@printf <"unsupported exception",lf>
 	push cs
 	pop ss
 ;	int 3
@@ -3165,24 +3178,22 @@ if ?MAPINT07
 else
 	@termint 07		;terminate client
 endif
-	@callrmproc 08,<ss:[intrmcbrs+00*size INTRMCBr].rm_vec>
-;--- obsolete since v3.18
-;	@callrmproc 09,<ss:[intrmcbrs+01*size INTRMCBr].rm_vec>,myint09proc
-	@callrmproc 09,<ss:[intrmcbrs+01*size INTRMCBr].rm_vec>
-	@callrmproc 0A,<ss:[intrmcbrs+02*size INTRMCBr].rm_vec>
-	@callrmproc 0B,<ss:[intrmcbrs+03*size INTRMCBr].rm_vec>
-	@callrmproc 0C,<ss:[intrmcbrs+04*size INTRMCBr].rm_vec>
-	@callrmproc 0D,<ss:[intrmcbrs+05*size INTRMCBr].rm_vec>
-	@callrmproc 0E,<ss:[intrmcbrs+06*size INTRMCBr].rm_vec>
-	@callrmproc 0F,<ss:[intrmcbrs+07*size INTRMCBr].rm_vec>
+	@callrmirq 08
+	@callrmirq 09
+	@callrmirq 0A
+	@callrmirq 0B
+	@callrmirq 0C
+	@callrmirq 0D
+	@callrmirq 0E
+	@callrmirq 0F
 
-	@callrmproc 70,<ss:[intrmcbrs+08*size INTRMCBr].rm_vec>
-	@callrmproc 71,<ss:[intrmcbrs+09*size INTRMCBr].rm_vec>
-	@callrmproc 72,<ss:[intrmcbrs+10*size INTRMCBr].rm_vec>
-	@callrmproc 73,<ss:[intrmcbrs+11*size INTRMCBr].rm_vec>
-	@callrmproc 74,<ss:[intrmcbrs+12*size INTRMCBr].rm_vec>
+	@callrmirq 70
+	@callrmirq 71
+	@callrmirq 72
+	@callrmirq 73
+	@callrmirq 74
 if 0 ;v3.19
-	@callrmproc 75,<ss:[intrmcbrs+13*size INTRMCBr].rm_vec>
+	@callrmirq 75
 else
 defint75:
 ;--- new for v3.19:
@@ -3228,10 +3239,10 @@ defint75:
 @@:
 	@exception 10
 endif
-	@callrmproc 76,<ss:[intrmcbrs+14*size INTRMCBr].rm_vec>
-	@callrmproc 77,<ss:[intrmcbrs+15*size INTRMCBr].rm_vec>
-	@callrmproc 1C,<ss:[intrmcbrs+16*size INTRMCBr].rm_vec>
-;	@callrmproc 23,<ss:[intrmcbrs+17*size INTRMCBr].rm_vec>
+	@callrmirq 76
+	@callrmirq 77
+	@callrmirq 1C
+;	@callrmirq 23
 
 _TEXT32 ends
 
@@ -3305,26 +3316,15 @@ endif
 
 callbackisactive:
 
+ife ?HIDEIVTHOOKS
+	bt cs:[wIrqOrgRm],bp	; IRQ origin in rm?
+	jc irqrm2pm_3
+endif
+
 	cmp cs:[bExcEntry],-1	;host entry possible?
 	jnz irqrm2pm_3			;if no, jump to previous handler
 	shl bp,3				;sizeof INTRMCB == 8!
 
-if 0; ?CHECKIFINRMIVT wont work currently, no access of intrmcbs in rm
-	test cs:[bp+offset intrmcbs].INTRMCB.bFlags, RMVFL_FARPROC
-	jnz @F
-	push bx
-	movzx bx,cs:[bp+offset intrmcbs].INTRMCB.bIntNo
-	shl bx,2
-	push ds
-	push 0
-	pop ds
-	cmp word ptr [bx+2],GROUP16	;this check is now more complex
-	@drprintf "intrmcb: rm-vec %X=%X:%X",bx,[bx+2],[bx+0]
-	pop ds
-	pop bx
-	jnz irqrm2pm_31
-@@:
-endif
 	@rm2pmbreak
 	mov cs:[wTmpRegBX],bx
 	mov cs:[wTmpRegAX],ax
@@ -3424,6 +3424,14 @@ endif
 
 	inc ss:[cIntRMCB]
 
+ife ?HIDEIVTHOOKS
+	push ebx
+	sub bx, lowword offset intrmcbs
+	shr bx, 3
+	bts ss:[wIrqOrgRm], bx
+	pop ebx
+endif
+
 	mov ax,cs:[bx].INTRMCB.pmvec
 	test cs:[bx].INTRMCB.bFlags,RMVFL_IDT	;is pmvec a IDT offset?
 	jz irqrm2pm_1
@@ -3496,6 +3504,7 @@ endif
 if ?DEBUGLOG
 	@printf <"lpms_call_int intrrmcb",lf>
 endif
+	call _I2f168A_Hdpmi_CaptureContextV86
 	jmp lpms_call_int		;LPMS switch + jump to ring 3
 	align 4
 
@@ -3542,7 +3551,7 @@ _TEXT16 segment
 rpmstackr_rm:
 	@restorermstk		;restore v86iret.rSS & rSP
 	iret				;real mode iret!
-	align 4
+	align 2
 _TEXT16 ends
 
 rpmstackr endp
@@ -3564,68 +3573,58 @@ rpmstackr endp
 
 ;--- Ints 00-05 + 07 route to real-mode
 ;--- stack frame:
-;--- esp+0 -> DWORD intno
+;--- esp+0 : int#
 ;--- esp+4 -> IRET32
 ;--- flags not modified
 ;--- used by macro @callrmint 
 
 dormint proc
 	xchg ebx, [esp]
-	@getrmintvec
-	mov ss:calladdr1, ebx
 	jmp callrmproc_1
 	align 4
 dormint endp
 
-;--- call a real-mode INT, then return to r3 via IRETD
-;--- Ints 08-0F and 70-77, 1C
-;--- esp+0 -> real-mode far proc to call (must have a IRET frame)
+;--- call a real-mode IRQ, then return to r3 via IRETD;
+;--- this is the default handling for Ints 08-0F and 70-77, 1C.
+;--- esp+0 : IRQ#
 ;--- esp+4 -> IRET32
-;--- flags not modified
-;--- used by macro @callrmproc
+;--- r3 flags not modified.
+;--- used by macro @callrmirq.
 
 callrmproc_iretframe proc
-	pop ss:[calladdr1]
-	push ebx
+	xchg ebx, [esp]
+ife ?HIDEIVTHOOKS
+	bt dword ptr ss:[wIrqOrgRm], ebx	; interrupt origin rm?
+else
+	bt dword ptr ss:[wIntRmCb], ebx		; interrupt hooked by protected-mode app?
+endif
+	jc usestoredproc
+	mov bl, cs:[ebx*8][intrmcbs.bIntNo]
+	;@printf <"pm to rmivt: %b", lf>, bx
 callrmproc_1::
+	@getrmintvec
+	jmp callrmproc_2
+usestoredproc:
+	;@printf <"pm to rmvec: %b",lf>, bx
+	mov ebx, ss:[ebx*4][intrmcbrs.rm_vec]
+callrmproc_2:
+	mov ss:[calladdr1], ebx
 	mov ebx, [esp+4].IRET32.rFL
 	and bh, not _TF		;reset TF
-	;and bh, not _IF
 if ?SETRMIOPL	;is 0 by default
 	and bh, 0CFh
 	or bh, ?RMIOPL shl 4
 endif
 	mov ss:[tmpFLReg], bx
 	pop ebx
-	@jmp_rm callrmproc_rm
-	align 4
-_TEXT16 segment
-callrmproc_rm:
-	push cs:[tmpFLReg]
-	call cs:[calladdr1]
-	@jmp_pmX callrmproc_pm
-	align 4
-_TEXT16 ends
-callrmproc_pm:
-
-if ?DEBUGLOG
-	push ss
-	pushad
-	@printf <"callrmproc_iretframe end", lf>
-	@printf <"EAX=%lX EBX=%lX ECX=%lX EDX=%lX ESI=%lX",lf>,\
-		[esp].PUSHADS.rEAX,[esp].PUSHADS.rEBX,[esp].PUSHADS.rECX,[esp].PUSHADS.rEDX,[esp].PUSHADS.rESI
-	@printf <"EDI=%lX EBP=%lX ESP=%lX SS=%X",lf>,\
-		[esp].PUSHADS.rEDI,[esp].PUSHADS.rEBP,[esp].PUSHADS.RESERVE, word ptr [esp+sizeof PUSHADS]
-	popad
-	add esp, 4
-endif
+	@call_rm cs:[calladdr1], 1, cs:[tmpFLReg]
 	iretd
 	align 4
 callrmproc_iretframe endp
 
 ;***  call real-mode interrupt, then return to r3 via IRETD
-;---  unlike dormint above, flags are modified here!
-;---  [esp+0] : DWORD intno
+;---  unlike dormint above, flags are returned!
+;---  esp+0 : int#
 ;---  esp+4 -> IRET32
 ;---  used by macro @callrmsint
 
@@ -3634,15 +3633,12 @@ callrmproc_iretframe endp
 _callrmsint proc public
 
 	xchg ebx,[esp]
-	push eax
-	pop eax
 ;	@dprintf "callrmsint %X", bx
 	@getrmintvec
 	mov ss:calladdr2, ebx
 	mov ebx,[esp+4].IRET32.rFL
 ;	pushfd
 	and bh,not _TF		;reset TF
-	;and bh, not _IF
 	mov ss:[tmpFLReg],bx
 ;	popfd
 	pop ebx				;stack: ip,cs,fl,sp,ss
@@ -3656,7 +3652,7 @@ callrmsint_rm:
 	@rm2pmbreak
 	pop cs:[tmpFLReg]
 	@jmp_pm callrmsint_pm
-	align 4
+	align 2
 _TEXT16 ends
 callrmsint_pm:
 	push eax
@@ -3665,15 +3661,6 @@ callrmsint_pm:
 if ?PMIOPL
 	or ah, ?PMIOPL shl 4
 endif
-	;push ecx
-	;mov cx, word ptr [esp+4].IRET32.rFL
-	;and cx, 200h
-	;or ax, cx
-	;mov cx, word ptr [esp+4].IRET32.rFL
-	;or cx, not 200h
-	;and ax, cx
-	;pop ecx
-
 	mov word ptr [esp+4].IRET32.rFL,ax
 	pop eax
 	iretd
@@ -3681,43 +3668,27 @@ endif
 _callrmsint endp
 
 ;--- call a real-mode near16 proc internally
-;--- esp+0 -> return address
-;--- esp+4 -> DWORD near16 proc to call
+;--- esp+0 : return address
+;--- esp+4 : near16 proc to call
 ;--- DS+ES may contain ring 0 selectors!
 
 callrmprocintern proc public
 	push eax
 	mov eax, [esp+2*4]
-;	mov ss:[calladdr3], eax
 	mov ss:[calladdr3], ax
 	pop eax
-	@jmp_rm callrmprocintern_rm
-	align 4
-_TEXT16 segment
-callrmprocintern_rm:
-	call cs:[calladdr3]
-if 1
-	@jmp_pmX callrmprocintern_pm
-else
-	pushf				;flags need not be saved, since jmp_pm won't modify them
-	@rm2pmbreak			;clears IF,TF+NT
-	pop cs:[tmpFLReg]
-	@jmp_pm callrmprocintern_pm
-endif
-	align 4
-_TEXT16 ends
-callrmprocintern_pm:
+	@call_rm cs:[calladdr3], 0
 	ret 4
 	align 4
 callrmprocintern endp
 
-;--- call a real-mode INT from inside host
-;*** proc called by macro @simrmint 
-;--- esp+0 -> return address
-;--- esp+4 -> DWORD intno
-;--- flags must be preserved ( see int21api.asm, rmdoswithcarry )
-
 	@ResetTrace
+
+;--- call a real-mode INT from inside host
+;--- esp+0 : return address
+;--- esp+4 : int#
+;--- flags must be preserved ( see int21api.asm, rmdoswithcarry )
+;--- used by macro @simrmint 
 
 callrmintintern proc public
 
@@ -3727,21 +3698,10 @@ callrmintintern proc public
 	@getrmintvec
 	mov ss:calladdr2, ebx
 	pop ebx
-	@jmp_rm callrmintintern_rm
-	align 4
-_TEXT16 segment
-callrmintintern_rm:
-;	@drprintf "callrmintintern: in real-mode now"
-	pushf
-	call cs:[calladdr2]
-callrmintintern_rm_exit::	;<--- entry for int21api.asm
-	@jmp_pmX callrmintintern_pm
-	align 4
-_TEXT16 ends
-callrmintintern_pm:
-;	@dprintf "callrmintintern: exit"
+	@call_rm cs:[calladdr2], 1, 1
 	ret 4
 	align 4
+
 callrmintintern endp
 
 	@ResetTrace
@@ -3881,9 +3841,6 @@ if ?EMUMOVDRXREG
 endif
 	jmp done
 donespec:
-if (?PMIOPL eq 0) and ?CHKIOINS
-	call chkioins
-endif
 done:
 ;	@dprintf "exception 0d, unknown instr %X", word ptr [esi]
 	pop eax
@@ -4160,8 +4117,8 @@ endif
 ;*** check if interrupt to modify is a IRQ (or 1Ch,23h,24h)
 ;*** if yes, provide for interrupts in real-mode to be routed to
 ;*** protected-mode
-;*** this routine is called with new PM-IRQ-Vektor in CX:(E)DX
-;*** from functions 31h,0205 (set pm vektor), BL=int
+;*** this routine is called with new PM-IRQ vector in CX:(E)DX
+;*** from functions 31h,0205 (set pm vector), BL=int.
 ;--- dont change any register here
 ;--- DS=FLAT
 
@@ -4209,8 +4166,8 @@ iirqxx:
 	mov ax,bx
 	test cs:[ebx*8+offset intrmcbs].INTRMCB.bFlags,RMVFL_IGN;don't route this IRQ?
 	jnz done
-	test cs:[ebx*8+offset intrmcbs].INTRMCB.bFlags,RMVFL_IDT;if [bx+6] points in IDT,
-									;no restauration is possible
+	test cs:[ebx*8+offset intrmcbs].INTRMCB.bFlags,RMVFL_IDT;if INTRMCB.pm_vec is IDT offset,
+															;then no restauration is possible
 	jnz @F
 	test cl,4						;is it a LDT selector?
 	jnz @F
@@ -5220,7 +5177,7 @@ if 0
 endif
 
 if ?GUARDPAGE0
-	test [bEnvFlags],ENVF_GUARDPAGE0 	;should page0 be guarded?
+	test [bEnvFlags], ENVF_HIDEIVTHOOKS	; hide IVT hooks (IRQs) from client?
 	jz @F
 ;	mov v86topm._Eip, offset vcpi_pmentry2
 	and byte ptr es:[?PG0PTE],not ?GPBIT;set page 0 to "system"
@@ -5496,12 +5453,8 @@ endif
 
 _exitclientEx proc near public
 
-ife ?DOSOUTPUT
-ifdef ?VIODIROUT
-if ?VIODIROUT
+if (?DOSOUTPUT eq 0) and (?FORCETEXTMODE eq 1)
 	call forcetextmode
-endif
-endif
 endif
 	@printf <lf,"hdpmi: fatal exit %X",lf,lf>,ax
 

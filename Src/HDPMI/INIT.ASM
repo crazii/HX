@@ -495,7 +495,7 @@ if ?INTRM2PM
 endif
 ;------------------------------------ prepare kernel debugger for PM
 
-	mov ax,D386_Prepare_PMode * 100h + 00h
+	mov ax,(D386_Prepare_PMode shl 8) or 00h	;AL=0 means "retail" version
 	mov cx, _KDSEL_		;first of 2 selectors reserved for kd
 	mov bx, _FLATSEL_	;selector for full memory access
 	mov dx, _GDTSEL_	;selector for GDT
@@ -541,13 +541,16 @@ initwdeb386_pm proc
 	mov al,PMINIT_INIT_IDT
 	@dprintf "call debugger pm proc,ax=%X,es:edi=%lX:%lX (init IDT)",ax,es,edi
 	call fword ptr [dbgpminit]
-if 0 ; v3.20
+if 1
 	mov ax,DS_DebLoaded
-	@dprintf "int 41h call,ax=%X",ax
 	int Debug_Serv_Int
-	@dprintf "int 41h ret,ax=%X (is F386?)",ax	;should return F386 in AX
-	mov ax,0f001h	; conditional BP?
+	@dprintf "int 41h DS_DebLoaded: ax=%X (%X?)",ax, word ptr DS_DebPresent
+	cmp ax, DS_DebPresent
+	jnz @F
+	xor esi, esi		; ds:esi should point to an asciiz string
+	mov ax, DS_CondBP	; conditional BP?
 	int Debug_Serv_Int
+@@:
 endif
 	popad
 done:
@@ -1104,9 +1107,11 @@ endif
 if ?NOINVLPG
 	db "  -g: don't use INVLPG opcode",lf
 endif
+if ?HIDEIVTHOOKS
 	db "  -i: hide host's IVT hooks for IRQ 0-15 [1]",lf
+endif
 if ?FORCETEXTMODE
-	db "  -k: ensure a text mode is set for host's displays",lf
+	db "  -k: ensure a text mode is set for host displays",lf
 endif
 	db "  -l: allocate TLB in low DOS memory [8]",lf
 	db "  -m: disable DPMI 1.0 memory functions [1024]",lf
@@ -1660,8 +1665,10 @@ else
 	cmp al,'g'
 	jz noinvlpg
  endif
+ if ?HIDEIVTHOOKS
 	cmp al,'i'
 	jz hideivthooks
+ endif
 	cmp al,'m'
 	jz ismem10disable
 	cmp al,'l'
@@ -1760,7 +1767,9 @@ endif
 if ?NOINVLPG
 	@OPTENTRY 'g', noinvlpg
 endif
+if ?HIDEIVTHOOKS
 	@OPTENTRY 'i', hideivthooks
+endif
 if ?FORCETEXTMODE        
 	@OPTENTRY 'k', setforcetext
 endif
@@ -1802,9 +1811,11 @@ setforcetext:
 	or fMode2, FM2_FORCETEXT
 	retn
 endif
+if ?HIDEIVTHOOKS
 hideivthooks:
-	or bEnvFlags, ENVF_GUARDPAGE0
+	or bEnvFlags, ENVF_HIDEIVTHOOKS
 	retn
+endif
 if ?NOINVLPG
 noinvlpg:
 	or fMode2, FM2_NOINVLPG

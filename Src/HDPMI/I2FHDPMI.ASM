@@ -40,6 +40,13 @@ rESP	dd ? ; ring 3 esp
 rSSd	dd ? ; ring 3 ss
 IOPORTTRAPFRAME ends
 
+RMCSD   struct          ;real mode call structure
+rEIP	dd ?
+rESP	dd ?
+rEFlags dd ?
+RMCS <>
+RMCSD   ends
+
 ;--- in a first step, it might be sufficient to have static storage for 4 port ranges.
 ?IOTP_COUNT equ 16
 ?USE_HOST_MEM equ 1 ;use host memory to store trapped stack frame. does not support trap recursion
@@ -53,6 +60,9 @@ trapstack label byte
 PUSHADS <>
 IOPORTTRAPFRAME <>
 endif
+
+intrcontext label byte
+RMCSD <>
 _DATA16 ends
 endif
 
@@ -123,12 +133,16 @@ tab168a label word
 ;--- ax=11: install irq ack handler
 ;---		esi = irq number
 ;---		ecx:edx = handler address
-
+;--- ax=12: get interrupt context
+;---		dx=data segment
+;---		edi=target buffer
 	@wofs is0006	; trap port range(s)
 	@wofs is0007	; release trapped port range(s)
 	@wofs is0008	; read/write trapped ports
 	@wofs is0009	; virtualize IRQ
-	@wofs is000a	; irq ack
+	@wofs is000a	; devirtualize IRQ
+	@wofs is000b	; irq ack
+	@wofs is000c	; interrupt context
 
  endif
 MAX168A equ ($ - offset tab168a) / sizeof word
@@ -315,11 +329,12 @@ done_0008:
 	ret
 
 is0009:
+is000a:
 	stc
 	ret
-is000a:
+is000b:
 	cmp esi, 15
-	ja fail_000a
+	ja fail_000b
 	push es
 	push byte ptr _CSALIAS_
 	pop es
@@ -328,8 +343,30 @@ is000a:
 	pop es
 	clc
 	ret
-fail_000a:
+fail_000b:
 	stc
+	ret
+is000c:
+	push ds
+	push es
+	push esi
+	push edi
+	push ecx
+
+	mov es, dx
+	push ss
+	pop ds
+	mov esi, offset intrcontext
+	mov ecx, sizeof RMCSD
+	cld
+	rep movsb
+
+	pop ecx
+	pop edi
+	pop esi
+	pop es
+	pop ds
+	clc
 	ret
  endif
  
@@ -617,6 +654,102 @@ _I2f168A_Hdpmi_InOutExcHandler_done:
 	add esp, 8 ;skip return addr + error code
 	iretd
 _I2f168A_Hdpmi_InOutExcHandler endp
+
+
+_I2f168A_Hdpmi_CaptureContext proc near public
+	mov ss:[intrcontext].RMCSD.rEAX, eax
+	mov ss:[intrcontext].RMCSD.rECX, ecx
+	mov ss:[intrcontext].RMCSD.rEDX, edx
+	mov ss:[intrcontext].RMCSD.rEBX, ebx
+	mov ss:[intrcontext].RMCSD.rEBP, ebp
+	mov ss:[intrcontext].RMCSD.rESI, esi
+	mov ss:[intrcontext].RMCSD.rEDI, edi
+	;@printf <"segments",lf>
+	push word ptr [esp+4].IRET32.rCS
+	pop word ptr ss:[intrcontext].RMCSD.rCS
+	push word ptr [esp+4].IRET32.rSS
+	pop word ptr ss:[intrcontext].RMCSD.rSS
+	push [esp+4].IRET32.rFL
+	pop ss:[intrcontext].RMCSD.rEFlags
+
+	;@printf <"EFLAGS: %lX",lf>, dword ptr [esp+4].IRET32.rFL
+	test [esp+4].IRET32.rFL, 20000h ; VM?
+	jz pmsave
+	;@printf <"rmsave",lf>
+	push word ptr [esp+4].IRET32.rFL
+	pop word ptr ss:[intrcontext].RMCSD.rFlags
+	push word ptr [esp+4].IRET32.rSP
+	pop word ptr ss:[intrcontext].RMCSD.rSP
+	push word ptr [esp+4].IRET32.rIP
+	pop word ptr ss:[intrcontext].RMCSD.rIP
+
+	push word ptr [esp+4+IRET32]
+	pop word ptr ss:[intrcontext].RMCSD.rES
+	push word ptr [esp+4+IRET32+4]
+	pop word ptr ss:[intrcontext].RMCSD.rDS
+	push word ptr [esp+4+IRET32+8]
+	pop word ptr ss:[intrcontext].RMCSD.rFS
+	push word ptr [esp+4+IRET32+12]
+	pop word ptr ss:[intrcontext].RMCSD.rGS
+	jmp done
+pmsave:
+	;@printf <"pmsave",lf>
+	push [esp+4].IRET32.rSP
+	pop ss:[intrcontext].RMCSD.rESP
+	push [esp+4].IRET32.rIP
+	pop ss:[intrcontext].RMCSD.rEIP
+	push eax
+	mov eax, ds
+	mov ss:[intrcontext].RMCSD.rDS, ax
+	mov eax, es
+	mov ss:[intrcontext].RMCSD.rES, ax
+	mov eax, fs
+	;@printf <"FS: %X",lf>, ax
+	mov ss:[intrcontext].RMCSD.rFS, ax
+	mov eax, gs
+	;@printf <"GS: %X",lf>, ax
+	mov ss:[intrcontext].RMCSD.rGS, ax
+	pop eax
+done:
+	ret
+_I2f168A_Hdpmi_CaptureContext endp
+
+_I2f168A_Hdpmi_CaptureContextV86 proc public
+	mov ss:[intrcontext].RMCSD.rEAX, eax
+	mov ss:[intrcontext].RMCSD.rECX, ecx
+	mov ss:[intrcontext].RMCSD.rEDX, edx
+	mov ss:[intrcontext].RMCSD.rEBX, ebx
+	mov ss:[intrcontext].RMCSD.rEBP, ebp
+	mov ss:[intrcontext].RMCSD.rESI, esi
+	mov ss:[intrcontext].RMCSD.rEDI, edi
+
+	push eax
+	mov eax, ss:[v86iret].rEFL
+	mov ss:[intrcontext].RMCSD.rFlags, ax
+	;or eax, 20000h ;//VM must be set
+	mov ss:[intrcontext].RMCSD.rEFlags, eax
+	mov ax, ss:[v86iret].rCS
+	mov ss:[intrcontext].RMCSD.rCS, ax
+	mov ax, ss:[v86iret].rSS
+	mov ss:[intrcontext].RMCSD.rSS, ax
+
+	mov ax, ss:[v86iret].rIP
+	mov ss:[intrcontext].RMCSD.rIP, ax
+	mov ax, ss:[v86iret].rSP
+	mov ss:[intrcontext].RMCSD.rSP, ax
+
+	mov ax, ss:[v86iret].rDS
+	mov ss:[intrcontext].RMCSD.rDS, ax
+	mov ax, ss:[v86iret].rES
+	mov ss:[intrcontext].RMCSD.rES, ax
+	mov ax, ss:[v86iret].rFS
+	mov ss:[intrcontext].RMCSD.rFS, ax
+	mov ax, ss:[v86iret].rGS
+	mov ss:[intrcontext].RMCSD.rGS, ax
+	pop eax
+	ret
+_I2f168A_Hdpmi_CaptureContextV86 endp
+
 endif
 
 _TEXT32 ends
