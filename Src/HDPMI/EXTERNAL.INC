@@ -434,6 +434,9 @@ externdef xmsaddr:PF16			;XMS entry (RM)
 externdef wPSPSegm:word			;initial real-mode PSP of active client
 externdef wRmDest:word
 externdef wIntRmCb:word
+if ?IRQ_ROUTE
+externdef wIrqOrgPm:word
+endif
 externdef wHostPSP:word
 if ?DTAINHOSTPSP
 externdef dwHostDTA:dword

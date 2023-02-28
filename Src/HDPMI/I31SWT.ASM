@@ -455,7 +455,31 @@ endif
 	jnz @F
 	push byte ptr _FLATSEL_
 	pop ds
-if ?CHECKIRQRM
+
+if ?CHECKIRQRM and 0
+
+	if  ?IRQ_ROUTE
+	push edi
+	movzx edi, bl
+	;@printf <"call rm: %lX",lf>, edi
+	cmp edi, 08h
+	jb setr2pend
+	cmp edi, 0Fh
+	ja slave
+	sub edi, 08h
+	jmp setr2p
+slave:
+	cmp edi, 70h
+	jb setr2pend
+	cmp edi, 77h
+	ja setr2pend
+	sub edi, 68h
+setr2p:
+	bts dword ptr ss:[wIrqOrgPm], edi
+setr2pend:	
+	pop edi
+	endif
+
 	call checkirqrm		;modifies ds,ebx if int is routed to pm
 else
 	movzx ebx,bl

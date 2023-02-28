@@ -340,6 +340,15 @@ endm
 
 @simintlpms macro xx
 	call _I2f168A_Hdpmi_CaptureContext
+
+if ?IRQ_ROUTE
+if xx&h lt 10h
+	bts ss:[wIrqOrgPm], xx&h-08h
+elseif xx&h ge 70h
+	bts ss:[wIrqOrgPm], xx&h-68h
+endif
+endif
+
 	pushd offset r3vect&xx
 	jmp lpms_call_int
 	align 4
@@ -1243,6 +1252,9 @@ wIntRmCb	dw 2 dup (0);flags for up to 32 intrmcbs
 ife ?HIDEIVTHOOKS
 wIrqOrgRm	dw 2 dup (0); flags that IRQ originated in RM
 endif
+if ?IRQ_ROUTE	;route PM irq to IVT first
+wIrqOrgPm	dw 2 dup(0) ;flags that IRQ originated in PM
+endif
 
 if ?DPMI10EXX
 wExcHdlr	dw 2 dup (0);32 bits for exception handler type
@@ -1951,9 +1963,12 @@ if ?NO_IRQ_REENT
 	cmp ebx, 0FFFFFFFFh
 	je @F
 
-	if ?DEBUGLOG
 	not bx
 	bsf bx, bx
+if ?IRQ_ROUTE
+	btr ss:[wIrqOrgPm], bx
+endif
+	if ?DEBUGLOG
 	@printf <"ied %X, LPMSused: %b", lf>, bx, word ptr ss:[bLPMSused] 
 	endif
 @@:
@@ -2006,14 +2021,17 @@ if ?NO_IRQ_REENT
 	mov ebx, dword ptr [ebx-4]
 	and ss:[wIRQMask], bx
 	dec ss:[wNestedLevel]
-if ?DEBUGLOG
 	cmp ebx, 0FFFFFFFFh
 	je @F
 	not bx
 	bsf bx, bx
-	@printf <"iedn, %X", lf>, bx
-@@:
+if ?IRQ_ROUTE
+	btr ss:[wIrqOrgPm], bx
 endif
+	if ?DEBUGLOG
+	@printf <"iedn, %X", lf>, bx
+	endif
+@@:
 endif
 	;test byte ptr [esp].IRET32.rFL+1, 2
 	;jz @F
@@ -3292,9 +3310,17 @@ wPatchGrp163 dw 0	;will be patched with GROUP16
 @@:
 	sub bp,cs:wHostSeg
 
+if ?IRQ_ROUTE
+	bt cs:[wIrqOrgPm], bp ;prevent recursion
+	jc irqrm2pm_3
+endif
+
 	bt cs:wIntRmCb,bp
 	jc callbackisactive
 irqrm2pm_3:
+if ?IRQ_ROUTE
+	btr cs:[wIrqOrgPm], bp ;clear flag for RM reentrance
+endif
 	shl bp,2				;sizeof INTRMCBr == 4!
 irqrm2pm_31:
 if 0;_LTRACE_
@@ -3502,7 +3528,7 @@ endif
 	mov ax,ss:[wTmpRegAX]
 
 if ?DEBUGLOG
-	@printf <"lpms_call_int intrrmcb",lf>
+	@printf <"lpms_call_int intrmcb",lf>
 endif
 	call _I2f168A_Hdpmi_CaptureContextV86
 	jmp lpms_call_int		;LPMS switch + jump to ring 3
@@ -3539,6 +3565,9 @@ rpmstackr2 endp	;fall thru!
 ;--- jump back to real-mode, flags NOT modified.
 
 rpmstackr proc
+if ?DEBUGLOG
+	@printf <"intrmcb_pm end",lf>
+endif
 	lea esp, [esp + sizeof IRET32]	;skip the IRET32 frame
 	dec ss:[cIntRMCB]
 if _LTRACE_ and IRQLOG
@@ -3593,19 +3622,22 @@ dormint endp
 
 callrmproc_iretframe proc
 	xchg ebx, [esp]
+if ?IRQ_ROUTE
+	bt dword ptr ss:[wIrqOrgPm], ebx
+	jc callivt
+endif
 ife ?HIDEIVTHOOKS
 	bt dword ptr ss:[wIrqOrgRm], ebx	; interrupt origin rm?
 else
 	bt dword ptr ss:[wIntRmCb], ebx		; interrupt hooked by protected-mode app?
 endif
 	jc usestoredproc
+callivt:
 	mov bl, cs:[ebx*8][intrmcbs.bIntNo]
-	;@printf <"pm to rmivt: %b", lf>, bx
 callrmproc_1::
 	@getrmintvec
 	jmp callrmproc_2
 usestoredproc:
-	;@printf <"pm to rmvec: %b",lf>, bx
 	mov ebx, ss:[ebx*4][intrmcbrs.rm_vec]
 callrmproc_2:
 	mov ss:[calladdr1], ebx

@@ -1252,6 +1252,9 @@ ifnb <bRMSegs>
 	push ss:v86iret.rFSd
 	push ss:v86iret.rGSd
 endif
+
+	;@printf <"pushstate %X:%X=>%lX",lf>, ss:v86iret.rSS,ss:v86iret.rSP, ss:dwrmSSSPtmp
+
 	push ss:v86iret.rSS
 	push ss:v86iret.rSP
 
@@ -1454,4 +1457,6 @@ endm
 ;--- save segment regs in v86iret before switch
 	jmp _rawjmp_pm_savesegm
 endm
+
+?IRQ_ROUTE equ 1 ;route PM irq to IVT after PM handles are done.
 
