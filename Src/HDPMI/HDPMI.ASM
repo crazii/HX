@@ -339,7 +339,9 @@ endm
 ;--- this macro is used for IRQs only
 
 @simintlpms macro xx
+if ?PMIOPL eq 0
 	call _I2f168A_Hdpmi_CaptureContext
+endif
 
 if ?IRQ_ROUTE
 if xx&h lt 10h
@@ -3530,7 +3532,9 @@ endif
 if ?DEBUGLOG
 	@printf <"lpms_call_int intrmcb",lf>
 endif
+if ?PMIOPL eq 0
 	call _I2f168A_Hdpmi_CaptureContextV86
+endif
 	jmp lpms_call_int		;LPMS switch + jump to ring 3
 	align 4
 
@@ -3622,6 +3626,11 @@ dormint endp
 
 callrmproc_iretframe proc
 	xchg ebx, [esp]
+if ?DEBUGLOG
+	pushfd
+	@printf <"callrmproc_iretframe: %b",lf>,bx
+	popfd
+endif
 if ?IRQ_ROUTE
 	bt dword ptr ss:[wIrqOrgPm], ebx
 	jc callivt
@@ -3639,6 +3648,11 @@ callrmproc_1::
 	jmp callrmproc_2
 usestoredproc:
 	mov ebx, ss:[ebx*4][intrmcbrs.rm_vec]
+if ?DEBUGLOG
+	pushfd
+	@printf <"usestoredproc %lX",lf>, ebx
+	popfd
+endif
 callrmproc_2:
 	mov ss:[calladdr1], ebx
 	mov ebx, [esp+4].IRET32.rFL
@@ -3650,6 +3664,12 @@ endif
 	mov ss:[tmpFLReg], bx
 	pop ebx
 	@call_rm cs:[calladdr1], 1, cs:[tmpFLReg]
+
+if ?DEBUGLOG
+	pushfd
+	@printf <"callrmproc_iretframe: end",lf>
+	popfd
+endif
 	iretd
 	align 4
 callrmproc_iretframe endp
