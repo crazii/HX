@@ -94,6 +94,30 @@ _LTRACE_ = 0
 
 setrmivec proc public
 if ?CHECKIRQRM
+
+if 1
+	push ebx
+	cmp bl,?MPICBASE+0
+	jb vec2irq_end
+	cmp bl,?MPICBASE+8
+	jb vec2irq_int080f
+	cmp bl,?SPICBASE+0
+	jb vec2irq_end
+	cmp bl,?SPICBASE+8
+	jnb vec2irq_end
+	sub bl,?SPICBASE-8
+	jmp vec2irq_set
+vec2irq_int080f:
+	sub bl,?MPICBASE
+	jmp vec2irq_set
+vec2irq_set:
+	movzx ebx,bl
+	mov word ptr ss:[ebx*sizeof INTRMCBr + intrmcbrs.INTRMCBr.rm_vec], dx
+	mov word ptr ss:[ebx*sizeof INTRMCBr + intrmcbrs.INTRMCBr.rm_vec+2], cx
+vec2irq_end:
+	pop ebx
+endif
+
 	call checkirqrm
 else
 	movzx ebx,bl
