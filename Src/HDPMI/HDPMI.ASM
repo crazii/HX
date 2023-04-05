@@ -1036,6 +1036,9 @@ else
 bFPUAnd		db not (CR0_EM or CR0_TS)
 bFPUOr		db 0
 endif
+if ?RESTRICTMEM
+resshift	db 0				;shift right factor for -x option
+endif
 
 if ?KDSUPP
 fDebug	  db 0					;kernel debugger present?

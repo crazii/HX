@@ -1139,7 +1139,7 @@ if ?CR0_EM
 	db "  -w: don't clear CR0 EM bit",lf
 endif
 if ?RESTRICTMEM
-	db "  -x: restrict reported free memory to 256MB",lf
+	db " -x[n]: restrict reported free memory to 1..256MB",lf
 endif
 if ?INT15XMS
 	db "  -y: use extended memory not managed by XMS host",lf
@@ -1620,14 +1620,12 @@ endif
 
 ife ?STUB
 	mov si,80h
-	db 26h
-	lodsb
+	lodsb es:[si]
 	mov cl,al
 nextchar:
 	and cl,cl
 	jz scanok
-	db 26h			;es prefix
-	lodsb
+	lodsb es:[si]
 	dec cl
 	cmp al,'-'
 	jz isoption
@@ -1639,8 +1637,7 @@ nextchar:
 isoption:
 	and cl,cl
 	jz ishelp
-	db 26h
-	lodsb
+	lodsb es:[si]
 	dec cl
 	or al,20h
 
@@ -1837,6 +1834,17 @@ endif
 if ?RESTRICTMEM
 restrictmem:
 	or fMode2, FM2_RESTRMEM
+ if 1
+	mov al, es:[si]
+	sub al, '0'
+	jb @F
+	cmp al, 9
+	ja @F
+	mov resshift, al 
+	inc si
+	dec cl
+@@:
+ endif
 	retn
 endif
 if ?EARLYIVTSAVE
