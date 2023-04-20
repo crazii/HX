@@ -3951,7 +3951,7 @@ if ?TRAP_CLI
 	cmp byte ptr [esi-4], 9Ch
 	jne trapcli_failed
 	;-- pushf pop ax
-	@printf <"trapcli pushf pop ax %X %X",lf>, ax, word ptr [esp].EMUINSFR.dwEAX
+	;@printf <"trapcli pushf pop ax %X %X",lf>, ax, word ptr [esp].EMUINSFR.dwEAX
 	cmp ax, word ptr [esp].EMUINSFR.dwEAX
 	jne trapcli_failed
 	mov eax, [esp].EMUINSFR.dwEAX
