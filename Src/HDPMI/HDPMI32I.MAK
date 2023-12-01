@@ -66,8 +66,12 @@ $(LCMDS)
 
 $(OUTIOPL0)\$(NAME).lib: $(OBJMODS) $(NAME)i.mak
 	@cd $(OUTIOPL0)
-	@$(LIB16BIN) $(NAME).lib $(OBJNAMES:.\=+)
-	@jwlib -q -b $(NAME).lib -$(SRC).OBJ
+	@$(LIB16BIN) @<<
+$(NAME).lib $(OBJNAMES:.\=+)
+<<
+	@jwlib @<<
+-q -b $(NAME).lib -$(SRC).OBJ
+<<
 	@cd ..
 
 clean:
