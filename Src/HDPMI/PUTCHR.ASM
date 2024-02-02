@@ -97,6 +97,38 @@ else
 	movzx ebx,byte ptr es:[BIOSPAGE]
 	mov es:[EBX*2+BIOSCSR],ax		;set cursor pos 
 endif
+if ?VIODIROUT
+	push dx
+	push ax
+	push bx
+
+	;get abs pos: bx=ah*COLS+al
+	xor dh, dh
+	mov dl, al
+	mov bl, es:[BIOSCOLS]
+	mov al, ah
+	mul bl
+	add ax, dx
+	mov bx, ax
+	mov dx, 3d4h ;VGA control
+
+	mov al, 0eh  ;set high byte of cursor pos
+    out dx, al
+	inc dx		;VGA data port
+	mov al, bh
+	out dx, al
+
+	dec dx
+	mov al, 0fh ;set low byte
+	out dx, al
+	inc dx		;VGA data port
+	mov al, bl
+	out dx, al
+
+	pop bx
+	pop ax
+	pop dx
+endif;?VIODIROUT
 endm
 
 @getoffsfromcursor macro			;offs -> bx
@@ -404,6 +436,13 @@ usebios:
 ;	xor ecx,ecx
 ;	mov ds,ecx
 ;	mov es,ecx
+
+	in al,21h
+	mov ah,al
+	mov al,0FFh		;mask all irq
+	out 21h,al
+	push ax
+
 	mov bx,7
 	cmp al,0Ah
 	jnz @F
@@ -414,6 +453,11 @@ usebios:
 	mov ah,0Eh		;for graphics mode, use BIOS output routine
 	@simrmint 10h
 	@slowdown
+
+	pop ax
+	mov al, ah    ;restore irq mask
+	out 21h, al
+
 ;	pop ds
 endif
 putchrex:

@@ -33,7 +33,8 @@ LOPT = format DOS
 
 LCMDS = $(LOPT) file $(OUTIOPL0)\$(SRC).obj name $*.EXE lib $(OUTIOPL0)\$(NAME).lib op q, map=$*.MAP, stack=0 
 
-AOPT= -nologo -c -Cp -Sg -D?32BIT=1 -D?PMIOPL=0 $(AOPTD) -I$(INC32DIR) -Fl$* -Fo$*
+#VIODIROUT: use direct video output. bios call will enable interrupt for ring0 output if any device driver installed
+AOPT= -nologo -c -Cp -Sg -D?32BIT=1 -D?PMIOPL=0 -D?VIODIROUT=1 $(AOPTD) -I$(INC32DIR) -Fl$* -Fo$*
 
 NAME  = HDPMI32
 SRC   = hdpmi
