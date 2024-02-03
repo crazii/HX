@@ -456,9 +456,9 @@ endif
 	push byte ptr _FLATSEL_
 	pop ds
 
-if ?CHECKIRQRM and 0
+if ?CHECKIRQRM and 0 ;call real mode int should route to IVT first - new handlers might be installed after HDPMI
 
-	if  ?IRQ_ROUTE
+	if  ?IRQ_ROUTE_IVT
 	push edi
 	movzx edi, bl
 	;@printf <"call rm: %lX",lf>, edi

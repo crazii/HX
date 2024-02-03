@@ -64,11 +64,16 @@ endif
 intrcontext label byte
 RMCSD <>
 _DATA16 ends
-endif
+endif ;if ?PMIOPL eq 0
 
 _DATA32C segment
-irqacktable label byte
+if ?IRQ_ROUTE
+irqroutetable label R3PROC
 R3PROC 16 dup({0,0})
+
+irqroutetable_ivt label dword
+dword 16 dup (0)
+endif
 _DATA32C ends
 
 _TEXT32 segment
@@ -130,19 +135,27 @@ tab168a label word
 ;---		ch=1(out),0(in)
 ;--- ax= 9: virtualize IRQ
 ;--- ax=10: devirtualize IRQ
-;--- ax=11: install irq ack handler
+;--- ax=11: install irq route handler
 ;---		esi = irq number
 ;---		ecx:edx = handler address
+;---		ebx: real mode handler address (can be -1 to skip, 0 to reset)
 ;--- ax=12: get interrupt context
 ;---		dx=data segment
 ;---		edi=target buffer
+;--- ax=13: get irq route handler
+;---		esi = irq number
+;--- return:
+;---		ecx:edx = handler address
+;---		ebx: real mode handler address (0 or valid)
+
 	@wofs is0006	; trap port range(s)
 	@wofs is0007	; release trapped port range(s)
 	@wofs is0008	; read/write trapped ports
 	@wofs is0009	; virtualize IRQ
 	@wofs is000a	; devirtualize IRQ
-	@wofs is000b	; irq ack
+	@wofs is000b	; irq route
 	@wofs is000c	; interrupt context
+	@wofs is000d
 
  endif
 MAX168A equ ($ - offset tab168a) / sizeof word
@@ -333,18 +346,22 @@ is000a:
 	stc
 	ret
 is000b:
+ife ?IRQ_ROUTE
+	jmp error
+endif
 	cmp esi, 15
-	ja fail_000b
+	ja error
 	push es
 	push byte ptr _CSALIAS_
 	pop es
-	mov es:[irqacktable+esi*sizeof R3PROC].R3PROC._Cs, ecx
-	mov es:[irqacktable+esi*sizeof R3PROC].R3PROC._Eip, edx
+	mov es:[irqroutetable+esi*sizeof R3PROC].R3PROC._Cs, ecx
+	mov es:[irqroutetable+esi*sizeof R3PROC].R3PROC._Eip, edx
+	cmp ebx, 0FFFFFFFFh
+	je @F
+	mov es:[irqroutetable_ivt + esi*4], ebx
+@@:
 	pop es
 	clc
-	ret
-fail_000b:
-	stc
 	ret
 is000c:
 	push ds
@@ -368,8 +385,19 @@ is000c:
 	pop ds
 	clc
 	ret
- endif
- 
+is000d:
+	cmp esi, 15
+	ja error
+	push es
+	push byte ptr _CSALIAS_
+	pop es
+	mov ecx, es:[irqroutetable+esi*sizeof R3PROC].R3PROC._Cs
+	mov edx, es:[irqroutetable+esi*sizeof R3PROC].R3PROC._Eip
+	mov ebx, es:[irqroutetable_ivt + esi*4]
+	pop es
+	clc
+	ret
+ endif ;if ?PMIOPL eq 0
 _I2f168A_Hdpmi endp
 
 
@@ -726,7 +754,7 @@ _I2f168A_Hdpmi_CaptureContextV86 proc public
 	push eax
 	mov eax, ss:[v86iret].rEFL
 	mov ss:[intrcontext].RMCSD.rFlags, ax
-	;or eax, 20000h ;//VM must be set
+	;or eax, 20000h ;VM must be set
 	mov ss:[intrcontext].RMCSD.rEFlags, eax
 	mov ax, ss:[v86iret].rCS
 	mov ss:[intrcontext].RMCSD.rCS, ax
@@ -750,11 +778,104 @@ _I2f168A_Hdpmi_CaptureContextV86 proc public
 	ret
 _I2f168A_Hdpmi_CaptureContextV86 endp
 
-endif
+endif ;if ?PMIOPL eq 0
+
+if ?IRQ_ROUTE
+_I2f168A_Hdpmi_UpdateIRQRoute proc near public
+	push es
+	pushfd
+	push edx
+	push eax
+	push ebx
+	push ecx
+	push edi
+	cli
+
+	push byte ptr _CSALIAS_
+	pop es
+
+	mov dx, 4D1h
+	in al, dx
+	mov ah, al
+	dec dx
+	in al, dx
+	test ax, 2107h
+	jnz done
+	
+	mov ecx, 16
+@@:
+	dec cl
+	bt ax, cx
+	jnc next
+	mov ebx, ecx
+	@dprintf <"BX: %b ">, bx
+
+	;irq will be skipped if already set
+	cmp es:[irqroutetable + ebx*sizeof R3PROC].R3PROC._Cs, 0
+	jne skippm
+
+	;load pm vector from r3vectxx and store to irqroutetable
+	mov edx, ebx
+	cmp ebx, 07h
+	ja slavepm
+	@dprintf <"MPM %X ">, dx
+	mov edi, es:[r3vect08 + edx*sizeof R3PROC].R3PROC._Cs
+	mov edx, es:[r3vect08 + edx*sizeof R3PROC].R3PROC._Eip
+	jmp setpmvec
+slavepm:
+	sub edx, 8
+	@dprintf <"SPM %X ">, dx
+	mov edi, es:[r3vect70 + edx*sizeof R3PROC].R3PROC._Cs
+	mov edx, es:[r3vect70 + edx*sizeof R3PROC].R3PROC._Eip
+setpmvec:
+	@dprintf <"DI: %X, EDX: %lX ">, di, edx
+
+	mov es:[irqroutetable + ebx*sizeof R3PROC].R3PROC._Cs, edi
+	mov es:[irqroutetable + ebx*sizeof R3PROC].R3PROC._Eip, edx
+skippm:
+
+	cmp es:[irqroutetable_ivt + ebx*4], 0
+	jne skiprm
+
+	;load rm vector from IVT and store to irqroutetable_ivt
+	mov edx, ebx
+	cmp ebx, 07h
+	ja slaverm
+	add edx, 8 ; irq to vec
+	@dprintf <"MRM %X ">, dx
+	jmp setrmvec
+slaverm:
+	add edx, 68h
+	@dprintf <"SRM %X ">, dx
+setrmvec:
+	shl edx, 2 ;*4
+	sub edx, ss:[dwSSBase]
+	mov edx, ss:[edx]
+
+	@dprintf <"EDX: %lX",lf>, edx
+
+	mov es:[irqroutetable_ivt + ebx*4], edx
+skiprm:
+
+
+next:
+	test cl, cl
+	jnz @B
+done:
+	pop edi
+	pop ecx
+	pop ebx
+	pop eax
+	pop edx
+	popfd
+	pop es
+	ret
+_I2f168A_Hdpmi_UpdateIRQRoute endp
+endif ;if ?IRQ_ROUTE
 
 _TEXT32 ends
 
 
-endif
+endif ;if ?VENDORAPI
 
 end

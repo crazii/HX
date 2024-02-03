@@ -113,6 +113,9 @@ _I2f168A_Hdpmi_InOutExcHandler proto near
 _I2f168A_Hdpmi_CaptureContext proto near
 _I2f168A_Hdpmi_CaptureContextV86 proto near
 endif
+if ?IRQ_ROUTE
+_I2f168A_Hdpmi_UpdateIRQRoute proto near
+endif
 _vxd_0001 proto near
 _vxd_0009 proto near
 _vxd_0017 proto near
@@ -267,7 +270,10 @@ endif
 if ?PMIOPL eq 0
 externdef _I2f168A_Hdpmi_InOutExcHandler_back:abs
 externdef _I2F168A_HDPMI_IOTP_BACK:abs
-externdef irqacktable:abs
+endif
+if ?IRQ_ROUTE
+externdef irqroutetable:R3PROC
+externdef irqroutetable_ivt:dword
 endif
 externdef _I2F1684_0001_:abs
 externdef _I2F1684_0009_:abs
@@ -437,7 +443,7 @@ externdef xmsaddr:PF16			;XMS entry (RM)
 externdef wPSPSegm:word			;initial real-mode PSP of active client
 externdef wRmDest:word
 externdef wIntRmCb:word
-if ?IRQ_ROUTE
+if ?IRQ_ROUTE_IVT
 externdef wIrqOrgPm:word
 endif
 externdef wHostPSP:word
@@ -470,6 +476,7 @@ _DATA16 ends
 _DATA32C segment
 externdef intrmcbs:INTRMCB		;start internal real-mode callbacks
 externdef r3vect00:R3PROC
+externdef r3vect08:R3PROC
 externdef r3vect20:R3PROC
   if ?FASTINT21
 externdef r3vect21:R3PROC

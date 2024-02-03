@@ -165,12 +165,38 @@ if 0
 	mov ebx, ds:[ebx*4]
 	pop ds
 else
+
+if ?IRQ_ROUTE
+	push ebx
+	;vector to irq num
+	cmp ebx, 08h
+	jb getrmintvec_fallback
+	cmp ebx, 0Fh
+	jbe getrmintvec_master
+	cmp ebx, 70h
+	jb getrmintvec_fallback
+	cmp ebx, 77h
+	ja getrmintvec_fallback
+	sub ebx, 60h ;fallthrough
+getrmintvec_master:
+	sub ebx, 08h
+	mov ebx, cs:[irqroutetable_ivt + ebx*4]
+	test ebx, ebx
+	jz getrmintvec_fallback
+	add esp, 4 ;discard ebx on stack
+	jmp getrmintvec_routed
+getrmintvec_fallback:
+	pop ebx
+endif
+
 	pushfd
 	shl ebx, 2
 	sub ebx, ss:[dwSSBase]
 	popfd
 	mov ebx, ss:[ebx]
+getrmintvec_routed:
 endif
+
 endm
 
 ;--- jump to default exception handler (exc2int) for exceptions 00-05 + 07
@@ -343,7 +369,7 @@ if ?PMIOPL eq 0
 	call _I2f168A_Hdpmi_CaptureContext
 endif
 
-if ?IRQ_ROUTE
+if ?IRQ_ROUTE_IVT
 if xx&h lt 10h
 	bts ss:[wIrqOrgPm], xx&h-08h
 elseif xx&h ge 70h
@@ -1203,11 +1229,13 @@ endif
 _DATA16 ends
 
 if ?PMIOPL eq 0
-?TRAP_CLI equ 1 ;trap POPF/STI after CLI
-?NO_IRQ_REENT equ 1 ;prevent reentrance of irqs
+?TRAP_CLISTI equ 1 ;trap POPF on CLI/STI
+?SKIP_CLISTI equ 0 ;skip cli/sti, if failed to detect/trap POPF - not used
+?NO_NESTED_INTR equ 1 ;disable interrupts on irq handler chain (no nesting in the middle of a chain, unless client enables IF explicitly)
 else
-?TRAP_CLI equ 0
-?NO_IRQ_REENT equ 0
+?TRAP_CLISTI equ 0
+?SKIP_CLISTI equ 0
+?NO_NESTED_INTR equ 0
 endif
 
 ;--- _DATA16C: client instance data both modes
@@ -1257,7 +1285,7 @@ wIntRmCb	dw 2 dup (0);flags for up to 32 intrmcbs
 ife ?HIDEIVTHOOKS
 wIrqOrgRm	dw 2 dup (0); flags that IRQ originated in RM
 endif
-if ?IRQ_ROUTE	;route PM irq to IVT first
+if ?IRQ_ROUTE_IVT	;route PM irq to IVT first
 wIrqOrgPm	dw 2 dup(0) ;flags that IRQ originated in PM
 endif
 
@@ -1269,18 +1297,10 @@ wEnvFlags	label word
 bEnvFlags	db 0		;flags of environment string "HDPMI="
 bEnvFlags2	db 0		;flags 256-32768 of "HDPMI="
 
-if ?PMIOPL eq 0
-
-if ?NO_IRQ_REENT
-wIRQMask		dw 0
-wNestedLevel	dw 0
+if ?IRQ_ROUTE_IVT
+wIRQReent	dw 32 dup(0)
 endif
-
-if ?TRAP_CLI
-wTrapCLI	dw 0
-endif
-
-endif
+wIntCount dw 0
 
 _DATA16C ends
 
@@ -1607,8 +1627,8 @@ IRQFRAME ends
 
 	mov edi,[esp].IRQFRAME.pR3Proc
 
-if ?NO_IRQ_REENT
-	mov esi, 0FFFFFFFFh
+if ?IRQ_ROUTE or ?IRQ_ROUTE_IVT
+	xor esi,esi
 	cmp edi, offset r3vect08
 	jb testIRQ_end
 	cmp edi, offset r3vect0F
@@ -1634,53 +1654,26 @@ setINIRQ:
 	shl esi, cl
 	pop ecx
 
-	if 1
-	;@printf <"irq mask: %X %X",lf>, ss:[wIRQMask], si
-	;@printf <"nested: %X",lf>, ss:[wNestedLevel]
-	;cmp ss:[wNestedLevel], 3
-	;jae @F
-	;jmp no_reent
-;@@:
-	;cmp si, 10h ;IRQ4 - test only
-	;je @F
-	;cmp si, 400h ; IRQ10
-	;je @F
-	;cmp si, 800h ; IRQ11
-	;je @F
-	;jmp no_reent
-	cmp si, 01h ;IRQ0
-	je no_reent
-	cmp si, 02h ;IRQ1
-	je no_reent
-	cmp si, 100h ;IRQ8
-	je no_reent
-	cmp si, 1000h; IRQ12
-	je no_reent
+	if ?IRQ_ROUTE
+	cmp cs:[irqroutetable+eax* sizeof R3PROC].R3PROC._Cs, 0
+	je no_route
+	lea edi, [irqroutetable+eax* sizeof R3PROC]
+	;@dprintf "irq route: %b %lX %lX %lX ", ax, offset irqroutetable, cs:[edi].R3PROC._Cs, cs:[edi].R3PROC._Eip
+	endif
+no_route:
+	inc ss:[wIRQReent+eax*2]
+testIRQ_end:
+
+	if ?DEBUGLOG
+	cmp esi, 0
+	je @F
+	@printf "int %b nested: %b ori %X ", ax, word ptr ss:wIntCount, word ptr ss:wIrqOrgPm
+	;@printf <"lpms_call_int: %b %lX %lX", lf>, ax, edi, offset r3vect08
 @@:
 	endif
-	test ss:[wIRQMask], si
-	jz no_reent
-	cmp cs:[irqacktable+eax* sizeof R3PROC].R3PROC._Cs, 0
-	je no_reent
-	;@printf <"irq: %lX",lf>, eax
-	lea edi, [irqacktable+eax* sizeof R3PROC]
-no_reent:
-	or ss:[wIRQMask], si
-	not esi
-testIRQ_end:
-	;@printf <"lpms call int %b, fl:%X",lf>, ax, word ptr [esp].IRQFRAME.iret32.rFL
-if ?DEBUGLOG
-	cmp esi, 0FFFFFFFFh
-	jne @F
-	;@printf <"lpms_call_int: %lX, %lX", lf>, edi, offset r3vect08
-@@:
-	cmp esi, 0FFFFFFFFh
-	je @F
-	movzx edx, ss:bLPMSused
-	@printf <"i%b LPMSused:%b",lf>, ax, dx
-@@:
-endif
-endif
+
+endif ;?IRQ_ROUTE or ?IRQ_ROUTE_IVT
+	inc ss:[wIntCount]
 
 if ?32BIT
 	mov eax, cs:[edi].R3PROC._Eip
@@ -1716,14 +1709,23 @@ endif
 if ?32BIT
 	mov [edi].IRETSPM.rIP, eax
 	mov [edi].IRETSPM.rCSd, edx
-	mov eax, [esp].IRQFRAME.iret32.rFL
-	mov [edi].IRETSPM.rFL, eax
 else
 	mov [edi].IRETSPM.rIP, ax
 	mov [edi].IRETSPM.rCS, dx
+endif
+
 	mov eax, [esp].IRQFRAME.iret32.rFL
+if ?NO_NESTED_INTR or 0
+	;we're returning to _RTINT_NESTED_, disable interrupt
+	;ring3 procs doesn't matter because IRET won't change IF, but the last one in the chain: callrmproc_iretframe is ring0
+	and ah, not _IF
+endif
+if ?32BIT
+	mov [edi].IRETSPM.rFL, eax
+else
 	mov [edi].IRETSPM.rFL, ax
 endif
+
 if ?PMIOPL eq 0
 	mov edx, [esp].IRQFRAME.iret32.rIP
 	mov [edi+sizeof IRETSPM + 0], edx
@@ -1731,10 +1733,10 @@ if ?PMIOPL eq 0
 	mov [edi+sizeof IRETSPM + 4], edx
 	;@printf <"lpmsn: %lX:%lX %lX",lf>, edx, eax, esi
 	;@printf <"lpmsn: %lX:%lX ",lf>, ds, edi
+	mov eax, [esp].IRQFRAME.iret32.rFL
 	mov [edi+sizeof IRETSPM + 8], eax
-if ?NO_IRQ_REENT
+if ?IRQ_ROUTE or ?IRQ_ROUTE_IVT
 	mov [edi+sizeof IRETSPM + 12], esi
-	inc ss:[wNestedLevel]
 endif
 endif
 	and ah,not 3		;reset TF + IF
@@ -1784,6 +1786,11 @@ endif
 	mov eax, [esp].IRQFRAME.iret32.rFL
 	mov [edi].IRETSPM.rIP, _RTINT_
 	mov [edi].IRETSPM.rCS, _INTSEL_
+if ?NO_NESTED_INTR or 0
+	;we're returning to _RTINT_, disable interrupt
+	;ring3 procs doesn't matter because IRET won't change IF, but the last one in the chain: callrmproc_iretframe is ring0
+	and ah, not _IF
+endif
 if ?32BIT
 	mov [edi].IRETSPM.rFL, eax
 else
@@ -1798,7 +1805,7 @@ endif
 	mov [edi+sizeof IRETSPM+4], edx
 	mov eax, [esp].IRQFRAME.iret32.rFL
 	mov [edi+sizeof IRETSPM+8], eax
-if ?NO_IRQ_REENT
+if ?IRQ_ROUTE or ?IRQ_ROUTE_IVT
 	mov [edi+sizeof IRETSPM+12], esi
 endif
 
@@ -1930,6 +1937,7 @@ RPMIFR ends
 rpmstacki proc
 	push ds
 	mov ss:bLPMSused,0
+	mov ss:wIntCount,0
 ife ?CSIPFROMTOP
 	push ebx
 	lds ebx,[esp].RPMIFR.rSSSP		;get the LPMS
@@ -1938,17 +1946,19 @@ ife ?CSIPFROMTOP
 	push dword ptr [ebx+8];push [esp+8].RPMIFR.rFL			;EFL
 	push dword ptr [ebx+4]			;CS
 	push dword ptr [ebx+0]			;EIP
-if ?NO_IRQ_REENT
+if ?IRQ_ROUTE or ?IRQ_ROUTE_IVT
 	mov ebx, dword ptr [ebx+12]
-	and ss:[wIRQMask], bx
+	test ebx, ebx
+	jz @F
+	bsf ebx, ebx
+	mov ss:[wIRQReent + ebx*2], 0
+	if ?IRQ_ROUTE_IVT
+	btr ss:[wIrqOrgPm], bx
+	endif
 if ?DEBUGLOG
-	cmp ebx, 0FFFFFFFFh
-	je @F
-	not bx
-	bsf bx, bx
 	@printf <"iedx %X", lf>, bx
-@@:
 endif
+@@:
 endif
 	lds ebx,[esp+sizeof IRET32]		;restore DS,EBX
 else
@@ -1960,21 +1970,19 @@ else
 	assume ds:GROUP16
 	push dword ptr ds:[?LPMSSIZE-12]	;CS
 	push dword ptr ds:[?LPMSSIZE-16]	;EIP
-if ?NO_IRQ_REENT
+if ?IRQ_ROUTE or ?IRQ_ROUTE_IVT
 	push ebx
 	mov ebx, dword ptr ds:[?LPMSSIZE-4]
-	and ss:[wIRQMask], bx
-
-	cmp ebx, 0FFFFFFFFh
-	je @F
-
-	not bx
-	bsf bx, bx
-if ?IRQ_ROUTE
+	test ebx, ebx
+	jz @F
+	bsf ebx, ebx
+	mov ss:[wIRQReent+ebx*2], 0
+	if ?IRQ_ROUTE_IVT
 	btr ss:[wIrqOrgPm], bx
-endif
+	endif
 	if ?DEBUGLOG
-	@printf <"ied %X, LPMSused: %b", lf>, bx, word ptr ss:[bLPMSused] 
+	;@printf <"ied %X, LPMSused: %b", lf>, bx, word ptr ss:[bLPMSused] 
+	@printf <"ied ">
 	endif
 @@:
 	pop ebx
@@ -1983,7 +1991,6 @@ endif
 	;@printf <"lpms call int end. fl:%X", lf>, word ptr [esp].IRET32.rFL
 	mov ds,[esp+sizeof IRET32]
 endif
-if ?PMIOPL eq 0
 ;--- ensure that interrupts are enabled -
 ;--- an IRET in ring3 does NOT restore IF if IOPL is 0.
 ;--- since rpmstacki() is called only if a stack must be switched back to PMS,
@@ -1992,12 +1999,8 @@ if ?PMIOPL eq 0
 ;--- this is "usually" the case when the IRQ was routed from real-mode.
 	;cmp word ptr [esp].IRET32.rCS, _INTSEL_
 	;jz @F
-	;or byte ptr [esp].IRET32.rFL+1, 2
-endif
-if ?NO_IRQ_REENT
-	mov ss:[wIRQMask], 0
-	mov ss:[wNestedLevel],0
-endif
+	;or byte ptr [esp].IRET32.rFL+1, _IF
+;@@:
 	iretd
 	align 4
 rpmstacki endp
@@ -2016,35 +2019,41 @@ rpmstacki_nested proc
 	;@printf <"RTINTN: cs:ip=%lX:%lX, ss:sp=%lX:%lX", lf>, dword ptr [ebx+4], dword ptr [ebx], dword ptr ds, ebx
 	;@printf <"RTINTN: %lX:%lX", lf>, dword ptr ds, ebx
 	;@printf <"RTINTN: %lX:%lX %lX", lf>, dword ptr [ebx+4], dword ptr [ebx+8], dword ptr [ebx+12]
+
+if ?NO_NESTED_INTR
+	;incase that client modifies flags before IRET
+	test [ebx - sizeof IRETSPM].IRETSPM.rFL, 200h
+	jz @F
+	or word ptr [ebx+8], 200h
+	cli
+@@:
+endif
+
 	push ds							;SS
 	add ebx, 16
 	push ebx						;ESP
 	push dword ptr [ebx-8]			;EFL
 	push dword ptr [ebx-12]			;CS
 	push dword ptr [ebx-16]			;EIP
-if ?NO_IRQ_REENT
+if ?IRQ_ROUTE or ?IRQ_ROUTE_IVT
 	mov ebx, dword ptr [ebx-4]
-	and ss:[wIRQMask], bx
-	dec ss:[wNestedLevel]
-	cmp ebx, 0FFFFFFFFh
-	je @F
-	not bx
-	bsf bx, bx
-if ?IRQ_ROUTE
+	test ebx, ebx
+	jz @F
+	bsf ebx, ebx
+	dec ss:[wIRQReent+ebx*2]
+	if ?IRQ_ROUTE_IVT
+	jnz stillpm
 	btr ss:[wIrqOrgPm], bx
-endif
+stillpm:
+	endif
 	if ?DEBUGLOG
-	@printf <"iedn, %X", lf>, bx
+	;@printf <"iedn, %X", lf>, bx
+	@printf <"iedn%X %X">, ss:[wIrqOrgPm],bx
 	endif
 @@:
-endif
-	;test byte ptr [esp].IRET32.rFL+1, 2
-	;jz @F
-	;and byte ptr [esp].IRET32.rFL+1, not 1 ;reset TF
-	;cmp ss:[wTrapCLI], 0FFFFh
-	;jz @F
-	;dec ss:[wTrapCLI]
-@@:
+endif ;?IRQ_ROUTE or ?IRQ_ROUTE_IVT
+	dec ss:wIntCount
+
 	;@printf <"lpms call int endn. fl:%X", lf>, word ptr [esp].IRET32.rFL
 	lds ebx,[esp+sizeof IRET32]		;restore DS,EBX
 	iretd
@@ -2888,24 +2897,11 @@ TRAPCLIFRAME ends
 
 intr01 proc
 
-if ?TRAP_CLI
-	;test [esp].TRAPCLIFRAME.rFL, 100h ;TF?
-	;jz normalintr
-	;test ss:[wTrapCLI], 0FFFFh
-	;jz normalintr
-	test [esp].TRAPCLIFRAME.rFL, 200h ;IF
-	jz @F
-	;@printf <"trapcli with IF on", lf>
-	jmp doneiret
-@@:
+if ?TRAP_CLISTI
 	or [esp].TRAPCLIFRAME.rFL, 200h
 doneiret:
-	;dec ss:[wTrapCLI]
 	and [esp].TRAPCLIFRAME.rFL, not 100h
 	iretd
-normalintr:
-	@printf <"normal intr01", lf>
-	jmp $
 endif
 
 if ?TESTEXC01
@@ -3315,7 +3311,7 @@ wPatchGrp163 dw 0	;will be patched with GROUP16
 @@:
 	sub bp,cs:wHostSeg
 
-if ?IRQ_ROUTE
+if ?IRQ_ROUTE_IVT
 	bt cs:[wIrqOrgPm], bp ;prevent recursion
 	jc irqrm2pm_3
 endif
@@ -3323,8 +3319,8 @@ endif
 	bt cs:wIntRmCb,bp
 	jc callbackisactive
 irqrm2pm_3:
-if ?IRQ_ROUTE
-	btr cs:[wIrqOrgPm], bp ;clear flag for RM reentrance
+if ?IRQ_ROUTE_IVT
+	;btr cs:[wIrqOrgPm], bp ;clear flag for RM reentrance
 endif
 	shl bp,2				;sizeof INTRMCBr == 4!
 irqrm2pm_31:
@@ -3414,6 +3410,9 @@ _TEXT32 segment
 intrmcb_pm proc
 
 	@pushstate 1	;save client state, including realmode segm DS/ES/FS/GS
+if ?PMIOPL eq 0
+	call _I2f168A_Hdpmi_CaptureContextV86
+endif
 
 ;--- build an IRET32 frame on the host stack for IRETD to ring3.
 ;--- E/IP, CS and E/FLAGS will be copied to the LPMS/PMS
@@ -3445,6 +3444,9 @@ else
 	push ss:pmstate.rSSd
 	push ss:pmstate.rESP
 	push ss:tmpFLRegD
+if ?NO_NESTED_INTR
+	and byte ptr [esp+1], not _IF ;disable interrupts. _FRTIN_ with real mode iret will restore flags
+endif
 	pushd _INTSEL_
 	pushd _FRTIN_
 endif
@@ -3534,9 +3536,6 @@ endif
 
 if ?DEBUGLOG
 	@printf <"lpms_call_int intrmcb",lf>
-endif
-if ?PMIOPL eq 0
-	call _I2f168A_Hdpmi_CaptureContextV86
 endif
 	jmp lpms_call_int		;LPMS switch + jump to ring 3
 	align 4
@@ -3634,7 +3633,7 @@ if ?DEBUGLOG
 	@printf <"callrmproc_iretframe: %b",lf>,bx
 	popfd
 endif
-if ?IRQ_ROUTE
+if ?IRQ_ROUTE_IVT
 	bt dword ptr ss:[wIrqOrgPm], ebx
 	jc callivt
 endif
@@ -3660,6 +3659,9 @@ callrmproc_2:
 	mov ss:[calladdr1], ebx
 	mov ebx, [esp+4].IRET32.rFL
 	and bh, not _TF		;reset TF
+if ?NO_NESTED_INTR
+	and bh, not _IF
+endif
 if ?SETRMIOPL	;is 0 by default
 	and bh, 0CFh
 	or bh, ?RMIOPL shl 4
@@ -3668,10 +3670,10 @@ endif
 	pop ebx
 	@call_rm cs:[calladdr1], 1, cs:[tmpFLReg]
 
-if ?DEBUGLOG
-	pushfd
-	@printf <"callrmproc_iretframe: end",lf>
-	popfd
+	@dprintf <"callrmproc_iretframe: end",lf>
+
+if ?NO_NESTED_INTR
+	and byte ptr [esp].IRET32.rFL+1, not _IF
 endif
 	iretd
 	align 4
@@ -3694,6 +3696,9 @@ _callrmsint proc public
 	mov ebx,[esp+4].IRET32.rFL
 ;	pushfd
 	and bh,not _TF		;reset TF
+;if ?NO_NESTED_INTR
+	;and bh, not _IF
+;endif
 	mov ss:[tmpFLReg],bx
 ;	popfd
 	pop ebx				;stack: ip,cs,fl,sp,ss
@@ -3716,6 +3721,10 @@ callrmsint_pm:
 if ?PMIOPL
 	or ah, ?PMIOPL shl 4
 endif
+;if ?NO_NESTED_INTR
+	;and word ptr [esp+4].IRET32.rFL, 0200h;  original IF
+	;or ax, word ptr [esp+4].IRET32.rFL
+;endif
 	mov word ptr [esp+4].IRET32.rFL,ax
 	pop eax
 	iretd
@@ -3848,6 +3857,43 @@ dwDS	dd ?
 		R3FAULT32 <>
 EMUINSFR ends        
 
+
+getakey proc near
+
+	push ax
+	push dx
+
+	in al,21h
+	mov ah,al
+	mov al,0FFh		;disable all irq
+	out 21h,al
+
+@@:
+	in al,64h		;key down?
+	test al,1
+	jz @B
+	mov dl,al
+	in al,60h		;get data (ack interrupt)
+	test dl,20h		;input from PS/2 device?
+	jnz @B
+
+@@:
+	in al,64h		;key up?
+	test al,1
+	jz @B
+	mov dl,al
+	in al,60h		;get data (ack interrupt)
+	test dl,20h		;input from PS/2 device?
+	jnz @B
+
+	mov al,ah		;restore irq
+	out 21h,al
+
+	pop dx
+	pop ax
+	ret
+getakey endp
+
 ?CHKIOINS equ 0			;1=if IOPL=0, check if IN/OUT instruction at cs:eip
 
 	@ResetTrace
@@ -3910,7 +3956,32 @@ emucli:
 	test byte ptr [esp].EMUINSFR.rFL+1, 2
 	jz done_emuclisti
 
-if ?TRAP_CLI
+if ?SKIP_CLISTI
+	;DO NOTHING ON CLI
+	;This is equivalent of setting PVI flag, since when PVI is set, 
+	;interrupt is not enabled/disabled for real, it only operates the VIF flag
+	;and virtual interrupts is not used (VIP bit) so when PVI is set, CLI/STI means nothing.
+	;The only difference is PVI flag is HW assisted without #GP exception, so it is a little faster
+	;Either are not good, because we don't disable interrupts on CLI but client will access IO ports that conflicts with system IRQ handling
+	;but until a better solution is found, just do it for now.
+	;The right solution would be use VIP bit (or software emulate of PVI/VIP),
+	;but that needs virtual device drivers to handle all interrupts and provie virtual devices (PIT/KBD especially for games) to the clients
+
+	;cmp ss:wIntCount, 0
+	;je @F
+	;@printf "CLI in interrupt detected."
+	jmp done_emuclisti
+@@:	
+endif
+
+	;trap if pushf found before cli
+	;there're some cases that are hard/impossible to detect:
+	;1. pushf + pop reg (only eax is handled for now, other regs can be done too) + cli
+	;2. pushf + pop memory/pop reg mov memory + cli
+	;3. pushf + other more instructions + cli
+	;4. IRET frame manually built by client, or flags modified in interrupt IRET
+
+if ?TRAP_CLISTI
 	mov eax, [esp].EMUINSFR.rFL
 	;@printf <"cli inc trap %b, fl:%X", lf>, word ptr ss:[wTrapCLI], word ptr [esp].EMUINSFR.rFL
 	;or [esp].EMUINSFR.rFL, 100h ;TF
@@ -3958,24 +4029,87 @@ if ?TRAP_CLI
 	and eax, 200h
 	shr eax, 1
 	or [esp].EMUINSFR.dwEAX, eax
-trapcli_end:
-	;inc ss:[wTrapCLI]
+
+	jmp trapcli_end
+
 trapcli_failed:
-endif
-	and byte ptr [esp].EMUINSFR.rFL+1, not 2
+
+?DOS4GW_HACK equ 0
+
+if ?DOS4GW_HACK
+	push ecx
+	push esi
+
+	mov ecx, 32
+	lea esi, [esi-1]
+	sub esi, ecx
+@@:
+	lodsb
+	cmp al, 09Ch
+	je @F
+	loop @B
+@@:
+	dec esi
+	lodsd
+	pop esi
+	pop ecx
+	cmp al, 09Ch
+	jne trapcli_end
+	cmp [esi-1], 66h ;PUSHF, not PUSHFD
+	je trapcli_end
+
+	cmp eax, 0877009Ch ;DOS4GW signatures
+	jne trapcli_dump
+	cmp dword ptr [esi-5], 0ffa8e811h 	;DOS4GW signatures
+	jne trapcli_dump
+
+	lds esi, [esp].EMUINSFR.rSSSP
+	mov eax, [esi]
+	and eax, 200h
+	shr eax, 1
+	or word ptr [esi], ax ; TF
+
+	lds esi,[esp].EMUINSFR.rCSIP
+	inc esi
+	jmp trapcli_end
+
+trapcli_dump:
+	if 0
+	;@printf "trap cli %lX: ", dword ptr [esi-5]
+	push ecx
+	push esi
+	mov ecx, 32
+	lea esi, [esi-1]
+	sub esi, ecx
+@@:
+	@printf "%b ", word ptr [esi]
+	inc esi
+	loop @B
+
+	pop esi
+	pop ecx
+	@printf <lf>
+
+	call getakey
+	endif
+endif ;?DOS4GW_HACK
+
+trapcli_end:
+endif ;?TRAP_CLISTI
+
+    and byte ptr [esp].EMUINSFR.rFL+1, not 2
+
 	jmp done_emuclisti
 	align 4
 emusti:
 	@dprintf "emulate sti"
 
-	;test byte ptr [esp].EMUINSFR.rFL+1, 2 
-	;jnz done_emuclisti
+	test byte ptr [esp].EMUINSFR.rFL+1, 2 
+	jnz done_emuclisti
 
 	lodsb
 	cmp al, 0FAh	;CLI
 	je done_emuclisti
-
-	or byte ptr [esp].EMUINSFR.rFL+1, 2
 
 	if 1
 	cmp al, 0CFh	;IRET
@@ -3997,8 +4131,19 @@ emusti:
 	endif
 @@:
 	dec esi
+
+if ?SKIP_CLISTI
+	;cmp ss:wIntCount, 0
+	;je @F
+	;@printf "STI in interrupt detected."
 	jmp done_emuclisti
+@@:	
 endif
+	or byte ptr [esp].EMUINSFR.rFL+1, 2
+
+	jmp done_emuclisti
+
+endif ;if ?PMIOPL eq 0
 
 emuhlt:
 	@dprintf "emulate hlt"
@@ -5143,6 +5288,11 @@ firstvm:
 	call updateclonesize
 novm:
 endif
+
+if ?IRQ_ROUTE
+	call _I2f168A_Hdpmi_UpdateIRQRoute
+endif
+
 	@dprintf "initclient: calling saveclientstate, esp=%lX", esp
 	call _saveclientstate	;increments cApps
 	jc initclerr11			;no memory

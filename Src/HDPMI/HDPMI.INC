@@ -1458,5 +1458,10 @@ endm
 	jmp _rawjmp_pm_savesegm
 endm
 
-?IRQ_ROUTE equ 1 ;route PM irq to IVT after PM handles are done.
+?IRQ_ROUTE_IVT equ 1 ;route PM irq to IVT after PM handles are done.
 
+if ?PMIOPL eq 0
+?IRQ_ROUTE equ 1 ;custom routing
+else
+?IRQ_ROUTE equ 0
+endif
