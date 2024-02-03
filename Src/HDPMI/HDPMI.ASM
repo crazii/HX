@@ -4034,66 +4034,6 @@ if ?TRAP_CLISTI
 
 trapcli_failed:
 
-?DOS4GW_HACK equ 0
-
-if ?DOS4GW_HACK
-	push ecx
-	push esi
-
-	mov ecx, 32
-	lea esi, [esi-1]
-	sub esi, ecx
-@@:
-	lodsb
-	cmp al, 09Ch
-	je @F
-	loop @B
-@@:
-	dec esi
-	lodsd
-	pop esi
-	pop ecx
-	cmp al, 09Ch
-	jne trapcli_end
-	cmp [esi-1], 66h ;PUSHF, not PUSHFD
-	je trapcli_end
-
-	cmp eax, 0877009Ch ;DOS4GW signatures
-	jne trapcli_dump
-	cmp dword ptr [esi-5], 0ffa8e811h 	;DOS4GW signatures
-	jne trapcli_dump
-
-	lds esi, [esp].EMUINSFR.rSSSP
-	mov eax, [esi]
-	and eax, 200h
-	shr eax, 1
-	or word ptr [esi], ax ; TF
-
-	lds esi,[esp].EMUINSFR.rCSIP
-	inc esi
-	jmp trapcli_end
-
-trapcli_dump:
-	if 0
-	;@printf "trap cli %lX: ", dword ptr [esi-5]
-	push ecx
-	push esi
-	mov ecx, 32
-	lea esi, [esi-1]
-	sub esi, ecx
-@@:
-	@printf "%b ", word ptr [esi]
-	inc esi
-	loop @B
-
-	pop esi
-	pop ecx
-	@printf <lf>
-
-	call getakey
-	endif
-endif ;?DOS4GW_HACK
-
 trapcli_end:
 endif ;?TRAP_CLISTI
 
