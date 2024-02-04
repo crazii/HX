@@ -1230,7 +1230,10 @@ _DATA16 ends
 
 if ?PMIOPL eq 0
 ?TRAP_CLISTI equ 1 ;trap POPF on CLI/STI
-?SKIP_CLISTI equ 0 ;skip cli/sti, if failed to detect/trap POPF - not used
+?SKIP_CLISTI equ 1	;skip cli/sti, if failed to detect/trap POPF
+					;now used in interrupt only: STI in interrupt handler may cause recursion on a slow machine,
+					;when there is frequent interrupt happening.
+					;Even if the stack won't overflow, the initial interrupt who uses STI may take too long time to finish, or maybe never
 ?NO_NESTED_INTR equ 1 ;disable interrupts on irq handler chain (no nesting in the middle of a chain, unless client enables IF explicitly)
 else
 ?TRAP_CLISTI equ 0
@@ -3967,8 +3970,8 @@ if ?SKIP_CLISTI
 	;The right solution would be use VIP bit (or software emulate of PVI/VIP),
 	;but that needs virtual device drivers to handle all interrupts and provie virtual devices (PIT/KBD especially for games) to the clients
 
-	;cmp ss:wIntCount, 0
-	;je @F
+	cmp ss:wIntCount, 0
+	je @F
 	;@printf "CLI in interrupt detected."
 	jmp done_emuclisti
 @@:	
@@ -4073,8 +4076,8 @@ emusti:
 	dec esi
 
 if ?SKIP_CLISTI
-	;cmp ss:wIntCount, 0
-	;je @F
+	cmp ss:wIntCount, 0
+	je @F
 	;@printf "STI in interrupt detected."
 	jmp done_emuclisti
 @@:	
