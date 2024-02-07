@@ -180,9 +180,15 @@ if ?IRQ_ROUTE
 	sub ebx, 60h ;fallthrough
 getrmintvec_master:
 	sub ebx, 08h
+	cmp cs:[irqroutetable_ivt + ebx*4], 0
+	je getrmintvec_fallback_clientivt
 	mov ebx, cs:[irqroutetable_ivt + ebx*4]
-	test ebx, ebx
-	jz getrmintvec_fallback
+	add esp, 4 ;discard ebx on stack
+	jmp getrmintvec_routed
+getrmintvec_fallback_clientivt:
+	cmp cs:[irqroute_clientivt + ebx*4], 0
+	je getrmintvec_fallback
+	mov ebx, cs:[irqroute_clientivt + ebx*4]
 	add esp, 4 ;discard ebx on stack
 	jmp getrmintvec_routed
 getrmintvec_fallback:
@@ -1234,7 +1240,7 @@ if ?PMIOPL eq 0
 					;now used in interrupt only: STI in interrupt handler may cause recursion on a slow machine,
 					;when there is frequent interrupt happening.
 					;Even if the stack won't overflow, the initial interrupt who uses STI may take too long time to finish, or maybe never
-?NO_NESTED_INTR equ 1 ;disable interrupts on irq handler chain (no nesting in the middle of a chain, unless client enables IF explicitly)
+?NO_NESTED_INTR equ 1	;disable interrupts on irq handler chain (no nesting in the middle of a chain, unless client enables IF explicitly)
 else
 ?TRAP_CLISTI equ 0
 ?SKIP_CLISTI equ 0
@@ -1661,7 +1667,8 @@ setINIRQ:
 	cmp cs:[irqroutetable+eax* sizeof R3PROC].R3PROC._Cs, 0
 	je no_route
 	lea edi, [irqroutetable+eax* sizeof R3PROC]
-	;@dprintf "irq route: %b %lX %lX %lX ", ax, offset irqroutetable, cs:[edi].R3PROC._Cs, cs:[edi].R3PROC._Eip
+	;@printf <"irq route: %b %lX %lX %lX",lf>, ax, offset irqroutetable, cs:[edi].R3PROC._Cs, cs:[edi].R3PROC._Eip
+	;call getakey
 	endif
 no_route:
 	inc ss:[wIRQReent+eax*2]
@@ -3064,8 +3071,10 @@ intr0E proc
 	@simintlpms 0E
 exc0E:
 if ?GUARDPAGE0
+	ife ?IRQ_ROUTE
 	test ss:bEnvFlags, ENVF_HIDEIVTHOOKS
 	jz intr0e_1
+	endif
 	push eax
 	mov eax,cr2
 	cmp eax,1000h
@@ -4402,6 +4411,31 @@ if 0;?VIODIROUT
 ;--- output is critical if DOS or BIOS is used!
 	@dprintf "checkivtread: direct ivt read at %X trapped",ax
 endif
+if ?IRQ_ROUTE
+	sub eax,edx	;0,4,8,...
+	shr eax,2	;0,1,2,3,4
+	add ax, word ptr cs:[esi+4]
+	cmp eax, 15
+	ja @F
+
+	mov ss:[dwAddr],0
+	mov esi, cs:[irqroutetable_ivt+eax*4]
+	test esi, esi
+	jz @F
+	push es
+	push byte ptr _CSALIAS_
+	pop es
+	mov es:[irqroute_clientivt_index], eax
+
+	push byte ptr _FLATSEL_
+	pop es
+	mov eax,cr2
+	and al,0FCh
+	mov eax, es:[eax]
+	mov ss:[dwAddr], eax
+	pop es
+	jmp @F
+else
 	sub eax,edx	;0,4,8,...
 	shr eax,2	;0,1,2,3,4
 	add ax, word ptr cs:[esi+4]	;add start offset within intrmcbs table
@@ -4419,6 +4453,7 @@ endif
 	movzx edi,cs:[esi].INTRMCB.bIntNo
 	mov ds:[edi*4],eax	;store value in IVT
 	pop ds
+endif
 @@:
 	pop edx
 	pop edi
@@ -4433,16 +4468,63 @@ checkivtwrite proc
 	push ebx					;determine if it was a read or write
 	push ecx
 	push ds
+
+if ?IRQ_ROUTE
+	push es
+	push edx
+
+	mov eax,cr2
+	and al,0FCh
+	mov ebx, eax
+	push byte ptr _FLATSEL_
+	pop ds
+	mov ecx, ds:[ebx]	
+
+	mov esi, ss:[dwAddr]
+	push byte ptr _CSALIAS_
+	pop es
+	test esi, esi
+	jz @F
+	mov eax, es:[irqroute_clientivt_index]
+	cmp eax, 0FFFFFFFFh
+	je @F
+
+	mov es:[irqroute_clientivt_index], 0FFFFFFFFh
+	cmp ecx, esi
+	jne setbytes
+	mov es:[irqroute_clientivt+eax*4], esi
+	jmp @F
+setbytes:
+	mov dword ptr ds:[ebx], esi
+
+	lea esi, [irqroute_clientivt+eax*4]
+	lea ebx, [dwAddr]
+
+	mov edx, ecx
+	mov ecx, 4
+storeB:
+	cmp dl, byte ptr ss:[ebx]
+	je next
+	mov byte ptr es:[esi], dl
+next:
+	inc ebx
+	inc esi
+	shr edx, 8
+	loop storeB
+@@:
+	mov ss:[dwAddr],0
+
+	pop edx
+	pop es
+else
 	mov eax,cr2
 	and al,0FCh
 	mov ebx, eax
 	push byte ptr _FLATSEL_
 	pop ds
 	mov ecx, ds:[ebx]		;get modified CS:IP in IVT
-
 	mov esi, ss:[dwAddr]		;get pointer to INTRMCB
 	mov ss:[dwAddr],0
-
 	sub esi, offset intrmcbs	;esi now 0,8,16,24,32,...
 	mov eax, esi
 	shr eax, 3					;eax now 0,1,2,3,...
@@ -4455,6 +4537,7 @@ checkivtwrite proc
 	shr esi,1
 	mov ss:[esi+intrmcbrs].INTRMCBr.rm_vec,ecx	;store modified CS:IP
 	@dprintf "checkivtwrite: ivt write access trapped at %X",bx
+endif
 	pop ds
 	pop ecx
 	pop ebx

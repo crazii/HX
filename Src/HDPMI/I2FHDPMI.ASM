@@ -73,7 +73,10 @@ R3PROC 16 dup({0,0})
 
 irqroutetable_ivt label dword
 dword 16 dup (0)
-endif
+irqroute_clientivt label dword
+dword 16 dup (0)
+irqroute_clientivt_index dd  0FFFFFFFFh;temp
+endif;if ?IRQ_ROUTE
 _DATA32C ends
 
 _TEXT32 segment
@@ -156,6 +159,7 @@ tab168a label word
 	@wofs is000b	; irq route
 	@wofs is000c	; interrupt context
 	@wofs is000d
+	@wofs is000e
 
  endif
 MAX168A equ ($ - offset tab168a) / sizeof word
@@ -348,7 +352,7 @@ is000a:
 is000b:
 ife ?IRQ_ROUTE
 	jmp error
-endif
+else
 	cmp esi, 15
 	ja error
 	push es
@@ -363,6 +367,7 @@ endif
 	pop es
 	clc
 	ret
+endif
 is000c:
 	push ds
 	push es
@@ -386,6 +391,9 @@ is000c:
 	clc
 	ret
 is000d:
+ife ?IRQ_ROUTE
+	jmp error
+else
 	cmp esi, 15
 	ja error
 	push es
@@ -397,7 +405,30 @@ is000d:
 	pop es
 	clc
 	ret
- endif ;if ?PMIOPL eq 0
+endif
+is000e:
+
+ife ?IRQ_ROUTE
+	jmp error
+else
+	?PG0PTE equ 0FFC02000h
+	push eax
+	mov eax,?PG0PTE
+	sub eax,ss:[dwSSBase]
+
+	cmp ecx, 1
+	jne @F
+	and byte ptr ss:[eax], not ?GPBIT
+	jmp is000e_done
+@@:
+	or byte ptr ss:[eax],?GPBIT
+is000e_done:
+	pop eax
+	clc
+	ret
+endif
+
+endif ;if ?PMIOPL eq 0
 _I2f168A_Hdpmi endp
 
 
@@ -754,7 +785,7 @@ _I2f168A_Hdpmi_CaptureContextV86 proc public
 	push eax
 	mov eax, ss:[v86iret].rEFL
 	mov ss:[intrcontext].RMCSD.rFlags, ax
-	;or eax, 20000h ;VM must be set
+	or eax, 20000h ;VM must be set
 	mov ss:[intrcontext].RMCSD.rEFlags, eax
 	mov ax, ss:[v86iret].rCS
 	mov ss:[intrcontext].RMCSD.rCS, ax
@@ -793,6 +824,12 @@ _I2f168A_Hdpmi_UpdateIRQRoute proc near public
 
 	push byte ptr _CSALIAS_
 	pop es
+	mov ecx, 16
+@@:
+	dec cl
+	mov es:[irqroute_clientivt+ecx*4],0
+	test cl,cl
+	jnz @B
 
 	mov dx, 4D1h
 	in al, dx
@@ -856,6 +893,8 @@ setrmvec:
 
 	mov es:[irqroutetable_ivt + ebx*4], edx
 skiprm:
+	mov edx, es:[irqroutetable_ivt + ebx*4]
+	mov es:[irqroute_clientivt+ecx*4],edx
 
 
 next:

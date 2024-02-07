@@ -274,6 +274,8 @@ endif
 if ?IRQ_ROUTE
 externdef irqroutetable:R3PROC
 externdef irqroutetable_ivt:dword
+externdef irqroute_clientivt:dword
+externdef irqroute_clientivt_index:dword
 endif
 externdef _I2F1684_0001_:abs
 externdef _I2F1684_0009_:abs
