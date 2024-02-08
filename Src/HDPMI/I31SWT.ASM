@@ -358,8 +358,8 @@ endif
 	push ds
 	push byte ptr _FLATSEL_
 	pop ds
-	mov [edx+0],si
-	mov [edx+2],eax
+	mov [edx+0],eax
+	mov [edx+4],si
 	pop ds
 
 	push es:[edi].RMCS.rEDI
@@ -382,8 +382,7 @@ endif
 _TEXT16 segment
 _retcb_rm:
 	@restorermstk		;restore RMS
-	popf
-	retf
+	iret
 	align 4
 _TEXT16 ends
 
