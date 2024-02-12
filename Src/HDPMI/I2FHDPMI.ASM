@@ -79,6 +79,16 @@ irqroute_clientivt_index dd  0FFFFFFFFh;temp
 endif;if ?IRQ_ROUTE
 _DATA32C ends
 
+if ?IRQ_ROUTE
+_DATA16C segment
+irqroutetable_rmvec label dword
+dword 16 dup (0)
+
+irqroutetable_rmvec_backup label dword
+dword 16 dup (0)
+_DATA16C ends
+endif
+
 _TEXT32 segment
 
 ;*** callback for HDPMI extensions
@@ -355,6 +365,7 @@ ife ?IRQ_ROUTE
 else
 	cmp esi, 15
 	ja error
+	push ebx
 	push es
 	push byte ptr _CSALIAS_
 	pop es
@@ -363,8 +374,13 @@ else
 	cmp ebx, 0FFFFFFFFh
 	je @F
 	mov es:[irqroutetable_ivt + esi*4], ebx
+	test ebx, ebx
+	jz @F
+	mov ebx, ss:[irqroutetable_rmvec_backup+esi*4]
 @@:
+	mov ss:[irqroutetable_rmvec+esi*4],ebx
 	pop es
+	pop ebx
 	clc
 	ret
 endif
@@ -828,6 +844,7 @@ _I2f168A_Hdpmi_UpdateIRQRoute proc near public
 @@:
 	dec cl
 	mov es:[irqroute_clientivt+ecx*4],0
+	mov ss:[irqroutetable_rmvec+ecx*4],0
 	test cl,cl
 	jnz @B
 
@@ -836,8 +853,9 @@ _I2f168A_Hdpmi_UpdateIRQRoute proc near public
 	mov ah, al
 	dec dx
 	in al, dx
-	test ax, 2107h
-	jnz done
+	;test ax, 2107h
+	;jnz done
+	;or ax, 04h
 	
 	mov ecx, 16
 @@:
@@ -895,6 +913,9 @@ setrmvec:
 skiprm:
 	mov edx, es:[irqroutetable_ivt + ebx*4]
 	mov es:[irqroute_clientivt+ecx*4],edx
+	mov edx, ss:[ebx*4][intrmcbrs.rm_vec]
+	mov ss:[irqroutetable_rmvec+ebx*4],edx
+	mov ss:[irqroutetable_rmvec_backup+ebx*4],edx
 
 
 next:

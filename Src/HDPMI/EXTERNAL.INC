@@ -357,6 +357,9 @@ externdef dwFeatures:dword
 externdef int15hk:IVTHOOK
 externdef wEMShandle:word
 externdef intrmcbrs:INTRMCBr
+if ?IRQ_ROUTE
+externdef irqroutetable_rmvec:dword
+endif
 if ?RESTRICTMEM
 externdef resshift:byte
 endif

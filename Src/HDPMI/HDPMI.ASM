@@ -193,7 +193,7 @@ getrmintvec_fallback_clientivt:
 	jmp getrmintvec_routed
 getrmintvec_fallback:
 	pop ebx
-endif
+endif;if ?IRQ_ROUTE
 
 	pushfd
 	shl ebx, 2
@@ -3348,7 +3348,24 @@ if 0;_LTRACE_
 		word ptr cs:[wIntRmCb+2], word ptr cs:[wIntRmCb+0]
 @@:
 endif
+
+if ?IRQ_ROUTE
+	push ebx
+	movzx ebx, bp
+	shr ebx, 2
+	cmp ebx, 15
+	ja rmvec_fallback
+	cmp cs:[irqroutetable_rmvec + ebx*4], 0
+	je rmvec_fallback
+	mov ebx, cs:[irqroutetable_rmvec + ebx*4]
+	xchg dword ptr [esp], ebx
+	jmp rmvec_ret
+rmvec_fallback:
+	pop ebx
+endif
 	pushd cs:[bp+intrmcbrs].INTRMCBr.rm_vec
+
+rmvec_ret:
 	mov bp,sp
 	mov bp,[bp+4]
 	retf 2	;skip bp on stack
@@ -3661,7 +3678,23 @@ callrmproc_1::
 	@getrmintvec
 	jmp callrmproc_2
 usestoredproc:
+
+if ?IRQ_ROUTE
+	push ebx
+	cmp ebx, 15
+	ja usestoredproc_fallback
+	cmp ss:[irqroutetable_rmvec + ebx*4], 0
+	je usestoredproc_fallback
+	mov ebx, ss:[irqroutetable_rmvec + ebx*4]
+	add esp, 4 ;discard ebx on stack
+	jmp usestoredproc_routed
+usestoredproc_fallback:
+	pop ebx
+endif
+
 	mov ebx, ss:[ebx*4][intrmcbrs.rm_vec]
+usestoredproc_routed:
+
 if ?DEBUGLOG
 	pushfd
 	@printf <"usestoredproc %lX",lf>, ebx
