@@ -375,10 +375,11 @@ else
 	je @F
 	mov es:[irqroutetable_ivt + esi*4], ebx
 	test ebx, ebx
-	jz @F
+	jz skip_rmvec_backup
 	mov ebx, ss:[irqroutetable_rmvec_backup+esi*4]
-@@:
+skip_rmvec_backup:
 	mov ss:[irqroutetable_rmvec+esi*4],ebx
+@@:
 	pop es
 	pop ebx
 	clc
@@ -856,6 +857,7 @@ _I2f168A_Hdpmi_UpdateIRQRoute proc near public
 	;test ax, 2107h
 	;jnz done
 	;or ax, 04h
+	and ax, not 07h
 	
 	mov ecx, 16
 @@:
