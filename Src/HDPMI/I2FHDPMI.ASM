@@ -846,6 +846,8 @@ _I2f168A_Hdpmi_UpdateIRQRoute proc near public
 	dec cl
 	mov es:[irqroute_clientivt+ecx*4],0
 	mov ss:[irqroutetable_rmvec+ecx*4],0
+	mov edx, ss:[ecx*4][intrmcbrs.rm_vec]
+	mov ss:[irqroutetable_rmvec_backup+ecx*4],edx
 	test cl,cl
 	jnz @B
 
@@ -917,8 +919,6 @@ skiprm:
 	mov es:[irqroute_clientivt+ecx*4],edx
 	mov edx, ss:[ebx*4][intrmcbrs.rm_vec]
 	mov ss:[irqroutetable_rmvec+ebx*4],edx
-	mov ss:[irqroutetable_rmvec_backup+ebx*4],edx
-
 
 next:
 	test cl, cl

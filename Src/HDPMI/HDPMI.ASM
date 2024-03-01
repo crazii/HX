@@ -1677,7 +1677,7 @@ testIRQ_end:
 	if ?DEBUGLOG
 	cmp esi, 0
 	je @F
-	@printf "int %b nested: %b ori %X ", ax, word ptr ss:wIntCount, word ptr ss:wIrqOrgPm
+	@printf <"irq %b nested: %b ori %X",lf>, ax, word ptr ss:wIntCount, word ptr ss:wIrqOrgPm
 	;@printf <"lpms_call_int: %b %lX %lX", lf>, ax, edi, offset r3vect08
 @@:
 	endif
@@ -1992,7 +1992,7 @@ if ?IRQ_ROUTE or ?IRQ_ROUTE_IVT
 	endif
 	if ?DEBUGLOG
 	;@printf <"ied %X, LPMSused: %b", lf>, bx, word ptr ss:[bLPMSused] 
-	@printf <"ied ">
+	@printf <"ied",lf>
 	endif
 @@:
 	pop ebx
@@ -2030,7 +2030,7 @@ rpmstacki_nested proc
 	;@printf <"RTINTN: %lX:%lX", lf>, dword ptr ds, ebx
 	;@printf <"RTINTN: %lX:%lX %lX", lf>, dword ptr [ebx+4], dword ptr [ebx+8], dword ptr [ebx+12]
 
-if ?NO_NESTED_INTR
+if ?NO_NESTED_INTR and 0
 	;incase that client modifies flags before IRET
 	test [ebx - sizeof IRETSPM].IRETSPM.rFL, 200h
 	jz @F
@@ -2058,7 +2058,7 @@ stillpm:
 	endif
 	if ?DEBUGLOG
 	;@printf <"iedn, %X", lf>, bx
-	@printf <"iedn%X %X">, ss:[wIrqOrgPm],bx
+	@printf <"iedn%X %X", lf>, ss:[wIrqOrgPm],bx
 	endif
 @@:
 endif ;?IRQ_ROUTE or ?IRQ_ROUTE_IVT
@@ -3564,7 +3564,9 @@ endif
 	mov ax,ss:[wTmpRegAX]
 
 if ?DEBUGLOG
+	pushfd
 	@printf <"lpms_call_int intrmcb",lf>
+	popfd
 endif
 	jmp lpms_call_int		;LPMS switch + jump to ring 3
 	align 4
@@ -3601,7 +3603,11 @@ rpmstackr2 endp	;fall thru!
 
 rpmstackr proc
 if ?DEBUGLOG
-	@printf <"intrmcb_pm end",lf>
+	push eax
+	pushfd
+	pop eax
+	@printf <"intrmcb_pm end %X",lf>, ax
+	pop eax
 endif
 	lea esp, [esp + sizeof IRET32]	;skip the IRET32 frame
 	dec ss:[cIntRMCB]
